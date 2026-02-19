@@ -1,0 +1,402 @@
+"""
+LangGraph CI/CD Healing Agent — State Machine
+================================================
+The brain of the autonomous CI/CD healing system.
+
+Graph Flow:
+  analyze_logs → generate_fix → apply_fix → verify_fix ─┐
+       ↑                                                  │
+       └──────────── (iteration < MAX) ──────────────────┘
+                         │ (iteration >= MAX or all_passed)
+                         ↓
+                    save_results
+
+Integration Points:
+  - Member 1 (Node.js backend) calls `run_agent(repo_path)` via subprocess
+  - Member 3 (Docker sandbox) produces errors.json that we read
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from pathlib import Path
+
+# LangGraph imports
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+
+# Local imports
+from config import MAX_ITERATIONS, COMMIT_PREFIX, VALID_BUG_TYPES, build_branch_name, calculate_score
+from error_parser import parse_errors_json, ParsedError, format_errors_summary
+from fix_generator import generate_fixes, format_fix_for_results
+from file_patcher import apply_all_fixes
+from sandbox_runner import run_sandbox, run_local_analysis
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Graph State Definition
+# ═══════════════════════════════════════════════════════════════════════
+
+class AgentState(TypedDict):
+    """Typed state for the LangGraph CI/CD agent."""
+    repo_path: str
+    team_name: str
+    leader_name: str
+    error_logs: List[ParsedError]
+    current_iteration: int
+    max_iterations: int
+    final_fixes: List[Dict[str, Any]]
+    fix_results: List[Dict[str, Any]]  # Each fix with its status
+    all_passed: bool
+    start_time: float
+    errors_json_path: str
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Node 1: Analyze Logs
+# ═══════════════════════════════════════════════════════════════════════
+
+def analyze_logs(state: AgentState) -> dict:
+    """
+    Read error logs from the Docker sandbox's errors.json output.
+    Parses and classifies each error into the correct bug type.
+    """
+    iteration = state["current_iteration"]
+    repo_path = state["repo_path"]
+
+    print(f"\n{'='*60}")
+    print(f"[ITERATION {iteration}/{state['max_iterations']}] Analyzing errors...")
+    print(f"{'='*60}")
+
+    # Run the sandbox to produce errors.json
+    errors_json_path = run_sandbox(repo_path)
+
+    # Parse the errors
+    errors = parse_errors_json(errors_json_path)
+
+    print(f"[ANALYZE] Found {len(errors)} error(s)")
+    if errors:
+        print(format_errors_summary(errors))
+
+    return {
+        "error_logs": errors,
+        "errors_json_path": errors_json_path,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Node 2: Generate Fix
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_fix(state: AgentState) -> dict:
+    """
+    Call the LLM with a strict system prompt to generate fixes.
+    Forces structured JSON output matching the exact hackathon format.
+    """
+    errors = state["error_logs"]
+    repo_path = state["repo_path"]
+
+    if not errors:
+        print("[GENERATE] No errors to fix!")
+        return {"final_fixes": state.get("final_fixes", []), "all_passed": True}
+
+    print(f"[GENERATE] Requesting fixes for {len(errors)} error(s) from LLM...")
+
+    fixes = generate_fixes(errors, repo_path)
+
+    print(f"[GENERATE] LLM returned {len(fixes)} fix(es)")
+    for fix in fixes:
+        print(f"  - {format_fix_for_results(fix)}")
+
+    return {"final_fixes": state.get("final_fixes", []) + fixes}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Node 3: Apply Fix
+# ═══════════════════════════════════════════════════════════════════════
+
+def apply_fix(state: AgentState) -> dict:
+    """
+    Apply the generated fixes to the actual source files.
+    """
+    repo_path = state["repo_path"]
+    all_fixes = state.get("final_fixes", [])
+
+    # Only apply fixes from the current iteration (new ones not yet applied)
+    existing_results = state.get("fix_results", [])
+    already_applied = len(existing_results)
+    new_fixes = all_fixes[already_applied:]
+
+    if not new_fixes:
+        print("[APPLY] No new fixes to apply.")
+        return {"fix_results": existing_results}
+
+    print(f"[APPLY] Applying {len(new_fixes)} fix(es)...")
+
+    results = apply_all_fixes(repo_path, new_fixes)
+
+    new_results = []
+    for fix, success in results:
+        result_entry = {
+            **fix,
+            "status": "fixed" if success else "failed",
+            "result_string": format_fix_for_results(fix),
+        }
+        new_results.append(result_entry)
+        status_icon = "✓" if success else "✗"
+        print(f"  {status_icon} {result_entry['result_string']}")
+
+    return {"fix_results": existing_results + new_results}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Node 4: Verify Fix
+# ═══════════════════════════════════════════════════════════════════════
+
+def verify_fix(state: AgentState) -> dict:
+    """
+    Check if we should loop or terminate.
+    - If iteration < max and fixes were applied, re-run the sandbox
+    - Otherwise, save results and terminate
+    """
+    iteration = state["current_iteration"]
+
+    print(f"[VERIFY] Iteration {iteration} complete.")
+
+    return {
+        "current_iteration": iteration + 1,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Node 5: Save Results
+# ═══════════════════════════════════════════════════════════════════════
+
+def save_results(state: AgentState) -> dict:
+    """
+    Save the final results.json in the exact format required.
+    This is what Member 1's Node.js backend reads.
+    """
+    repo_path = state["repo_path"]
+    fix_results = state.get("fix_results", [])
+    all_passed = state.get("all_passed", False)
+    start_time = state.get("start_time", time.time())
+    elapsed = time.time() - start_time
+
+    # Build the branch name
+    team_name = state.get("team_name", "TEAM")
+    leader_name = state.get("leader_name", "LEADER")
+    branch_name = _build_branch_name(team_name, leader_name)
+
+    # Format fixes for output
+    fixes_output = []
+    for result in fix_results:
+        fixes_output.append({
+            "file": result.get("file_path", ""),
+            "bug_type": result.get("bug_type", "LINTING"),
+            "line_number": result.get("line_number", 0),
+            "commit_message": result.get("commit_message", ""),
+            "status": result.get("status", "failed"),
+            "description": result.get("result_string", ""),
+            "fix_description": result.get("fix_description", ""),
+        })
+
+    # Count stats
+    total_fixes = len(fixes_output)
+    successful_fixes = sum(1 for f in fixes_output if f["status"] == "fixed")
+    failed_fixes = total_fixes - successful_fixes
+
+    # Build results.json
+    results = {
+        "repository": repo_path,
+        "team_name": team_name,
+        "leader_name": leader_name,
+        "branch_name": branch_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_time_seconds": round(elapsed, 2),
+        "iterations_used": state.get("current_iteration", 1),
+        "max_iterations": state.get("max_iterations", MAX_ITERATIONS),
+        "all_tests_passed": all_passed,
+        "ci_status": "PASSED" if all_passed else "FAILED",
+        "summary": {
+            "total_failures_detected": total_fixes,
+            "total_fixes_applied": successful_fixes,
+            "total_fixes_failed": failed_fixes,
+        },
+        "score": _calculate_score(
+            total_fixes, successful_fixes, elapsed,
+            state.get("current_iteration", 1)
+        ),
+        "fixes": fixes_output,
+        "ci_timeline": _build_ci_timeline(state),
+    }
+
+    # Write results.json
+    results_path = os.path.join(repo_path, "results.json")
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print(f"[RESULTS] Saved to {results_path}")
+    print(f"[RESULTS] CI Status: {'PASSED ✓' if all_passed else 'FAILED ✗'}")
+    print(f"[RESULTS] Fixes: {successful_fixes}/{total_fixes} applied")
+    print(f"[RESULTS] Time: {elapsed:.1f}s")
+    print(f"[RESULTS] Score: {results['score']['final_score']}")
+    print(f"{'='*60}\n")
+
+    return {"all_passed": all_passed}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Conditional Edge: Should Continue?
+# ═══════════════════════════════════════════════════════════════════════
+
+def should_continue(state: AgentState) -> str:
+    """Decide whether to loop back to analyze_logs or save results."""
+    if state.get("all_passed", False):
+        return "save_results"
+    if state["current_iteration"] >= state["max_iterations"]:
+        print(f"[AGENT] Max iterations ({state['max_iterations']}) reached. Saving results.")
+        return "save_results"
+    return "analyze_logs"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════════════
+
+# Helper functions imported from config.py
+_build_branch_name = build_branch_name
+_calculate_score = calculate_score
+
+
+def _build_ci_timeline(state: AgentState) -> list:
+    """Build CI/CD timeline for the dashboard."""
+    timeline = []
+    iterations = state.get("current_iteration", 1)
+    for i in range(1, iterations + 1):
+        is_last = i == iterations
+        passed = state.get("all_passed", False) if is_last else False
+        timeline.append({
+            "iteration": i,
+            "status": "PASSED" if passed else "FAILED",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    return timeline
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Build & Compile the LangGraph
+# ═══════════════════════════════════════════════════════════════════════
+
+def build_graph() -> StateGraph:
+    """Build and compile the LangGraph state machine."""
+
+    graph = StateGraph(AgentState)
+
+    # Add nodes
+    graph.add_node("analyze_logs", analyze_logs)
+    graph.add_node("generate_fix", generate_fix)
+    graph.add_node("apply_fix", apply_fix)
+    graph.add_node("verify_fix", verify_fix)
+    graph.add_node("save_results", save_results)
+
+    # Set entry point
+    graph.set_entry_point("analyze_logs")
+
+    # Add edges: analyze → generate → apply → verify
+    graph.add_edge("analyze_logs", "generate_fix")
+    graph.add_edge("generate_fix", "apply_fix")
+    graph.add_edge("apply_fix", "verify_fix")
+
+    # Conditional edge: verify → (analyze_logs OR save_results)
+    graph.add_conditional_edges(
+        "verify_fix",
+        should_continue,
+        {
+            "analyze_logs": "analyze_logs",
+            "save_results": "save_results",
+        }
+    )
+
+    # Terminal node
+    graph.add_edge("save_results", END)
+
+    return graph.compile()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Entry Point — Called by Member 1's Node.js Backend
+# ═══════════════════════════════════════════════════════════════════════
+
+def run_agent(
+    repo_path: str,
+    team_name: str = "TEAM",
+    leader_name: str = "LEADER",
+    max_iterations: int = MAX_ITERATIONS,
+) -> dict:
+    """
+    Main entry point for the CI/CD healing agent.
+    
+    Called by Member 1's backend via:
+        python agent.py <repo_path> <team_name> <leader_name>
+    
+    Returns the results dict (also saved to results.json).
+    """
+    print(f"\n{'#'*60}")
+    print(f"# CI/CD HEALING AGENT — RIFT 2026")
+    print(f"# Repo: {repo_path}")
+    print(f"# Team: {team_name}")
+    print(f"# Leader: {leader_name}")
+    print(f"# Max Iterations: {max_iterations}")
+    print(f"{'#'*60}\n")
+
+    # Build and run the graph
+    app = build_graph()
+
+    initial_state: AgentState = {
+        "repo_path": os.path.abspath(repo_path),
+        "team_name": team_name,
+        "leader_name": leader_name,
+        "error_logs": [],
+        "current_iteration": 1,
+        "max_iterations": max_iterations,
+        "final_fixes": [],
+        "fix_results": [],
+        "all_passed": False,
+        "start_time": time.time(),
+        "errors_json_path": "",
+    }
+
+    # Execute the graph
+    final_state = app.invoke(initial_state)
+
+    # Read and return results.json
+    results_path = os.path.join(os.path.abspath(repo_path), "results.json")
+    if os.path.exists(results_path):
+        with open(results_path, "r") as f:
+            return json.load(f)
+
+    return {"error": "Agent completed but no results.json was produced."}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CLI Interface
+# ═══════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python agent.py <repo_path> [team_name] [leader_name] [max_iterations]")
+        print("Example: python agent.py /workspace \"RIFT ORGANISERS\" \"Saiyam Kumar\" 5")
+        sys.exit(1)
+
+    repo = sys.argv[1]
+    team = sys.argv[2] if len(sys.argv) > 2 else "TEAM"
+    leader = sys.argv[3] if len(sys.argv) > 3 else "LEADER"
+    max_iter = int(sys.argv[4]) if len(sys.argv) > 4 else MAX_ITERATIONS
+
+    result = run_agent(repo, team, leader, max_iter)
+    print(json.dumps(result, indent=2))

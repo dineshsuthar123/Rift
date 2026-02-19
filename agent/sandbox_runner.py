@@ -1,0 +1,172 @@
+"""
+Docker Sandbox Runner.
+Manages the Docker container that runs ruff and pytest on the cloned repo.
+This is the integration point with Member 3's Docker setup.
+"""
+import json
+import subprocess
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+from config import DOCKER_IMAGE, DOCKER_TIMEOUT, WORKSPACE_DIR, ERRORS_JSON_PATH
+
+
+def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
+    """
+    Run the Docker sandbox container against the repository.
+    Returns the path to the errors.json file.
+    
+    Integration with Member 3:
+    - Mounts the repo at /workspace inside the container
+    - The container runs run_tests.sh which produces /workspace/errors.json
+    - We read errors.json after the container finishes
+    """
+    errors_output = os.path.join(repo_path, "errors.json")
+
+    # Remove stale errors.json if it exists
+    if os.path.exists(errors_output):
+        os.remove(errors_output)
+
+    try:
+        cmd = [
+            "docker", "run",
+            "--rm",
+            "--network=none",          # No network access for security
+            "-v", f"{os.path.abspath(repo_path)}:/workspace",
+            "--memory=512m",            # Memory limit
+            "--cpus=1.0",               # CPU limit
+            DOCKER_IMAGE
+        ]
+
+        print(f"[SANDBOX] Running: {' '.join(cmd)}")
+        start = time.time()
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=repo_path
+        )
+
+        elapsed = time.time() - start
+        print(f"[SANDBOX] Container finished in {elapsed:.1f}s (exit code: {result.returncode})")
+
+        if result.stdout:
+            print(f"[SANDBOX] stdout: {result.stdout[:500]}")
+        if result.stderr:
+            print(f"[SANDBOX] stderr: {result.stderr[:500]}")
+
+    except subprocess.TimeoutExpired:
+        print(f"[SANDBOX] Container timed out after {timeout}s")
+    except FileNotFoundError:
+        print("[SANDBOX] Docker not found. Falling back to local execution.")
+        return run_local_analysis(repo_path)
+    except Exception as e:
+        print(f"[SANDBOX] Error: {e}")
+        return run_local_analysis(repo_path)
+
+    return errors_output
+
+
+def run_local_analysis(repo_path: str) -> str:
+    """
+    Fallback: run ruff and pytest locally if Docker is not available.
+    Produces the same errors.json format as the Docker container.
+    """
+    errors = []
+    errors_output = os.path.join(repo_path, "errors.json")
+
+    # ─── Run ruff ─────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            ["ruff", "check", "--output-format=json", "."],
+            capture_output=True, text=True,
+            cwd=repo_path, timeout=60
+        )
+        if result.stdout:
+            try:
+                ruff_errors = json.loads(result.stdout)
+                for err in ruff_errors:
+                    errors.append({
+                        "file": err.get("filename", "").replace(os.path.abspath(repo_path) + os.sep, "").replace("\\", "/"),
+                        "line": err.get("location", {}).get("row", 0),
+                        "message": f"{err.get('code', '')} {err.get('message', '')}",
+                        "source": "ruff",
+                        "rule_code": err.get("code", "")
+                    })
+            except json.JSONDecodeError:
+                pass
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"[LOCAL] Ruff not available: {e}")
+
+    # ─── Run pytest ───────────────────────────────────────────────
+    try:
+        # Try with pytest-json-report first
+        result = subprocess.run(
+            ["python", "-m", "pytest", "--tb=short", "-v", "--no-header"],
+            capture_output=True, text=True,
+            cwd=repo_path, timeout=120
+        )
+
+        if result.returncode != 0 and result.stdout:
+            errors.extend(_parse_pytest_output(result.stdout + "\n" + result.stderr, repo_path))
+
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"[LOCAL] Pytest error: {e}")
+
+    # ─── Write errors.json ────────────────────────────────────────
+    with open(errors_output, "w", encoding="utf-8") as f:
+        json.dump(errors, f, indent=2)
+
+    print(f"[LOCAL] Found {len(errors)} errors, written to {errors_output}")
+    return errors_output
+
+
+def _parse_pytest_output(output: str, repo_path: str) -> list:
+    """Parse pytest text output into structured error dicts."""
+    import re
+    errors = []
+
+    # Match FAILED lines like: FAILED tests/test_main.py::test_func - AssertionError: ...
+    failed_pattern = re.compile(
+        r'FAILED\s+([\w/\\.]+)::(\w+)(?:\s*-\s*(.+))?'
+    )
+
+    # Match ERROR lines
+    error_pattern = re.compile(
+        r'ERROR\s+([\w/\\.]+)(?:::(\w+))?\s*-\s*(.+)'
+    )
+
+    # Match short traceback lines like: file.py:22: AssertionError
+    tb_pattern = re.compile(
+        r'([\w/\\.]+):(\d+):\s*((?:Assert|Type|Name|Import|Syntax|Indentation|Attribute|Value|Key|Index)\w*(?:Error|Warning)[:\s]*.*)' 
+    )
+
+    for match in tb_pattern.finditer(output):
+        file_path = match.group(1).replace("\\", "/")
+        line = int(match.group(2))
+        message = match.group(3).strip()
+
+        errors.append({
+            "file": file_path,
+            "line": line,
+            "message": message,
+            "source": "pytest"
+        })
+
+    # If no traceback matches, try FAILED lines
+    if not errors:
+        for match in failed_pattern.finditer(output):
+            file_path = match.group(1).replace("\\", "/")
+            message = match.group(3) or f"Test {match.group(2)} failed"
+            errors.append({
+                "file": file_path,
+                "line": 1,
+                "message": message,
+                "source": "pytest"
+            })
+
+    return errors
