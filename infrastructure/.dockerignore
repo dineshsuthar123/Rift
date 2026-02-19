@@ -1,0 +1,13 @@
+# Ignore git history, IDE files, and Python caches
+.git
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.ruff_cache
+.pytest_cache
+node_modules
+.env
+*.egg-info
+dist
+build
