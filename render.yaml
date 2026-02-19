@@ -24,3 +24,5 @@ services:
         value: 10
       - key: SANDBOX_IMAGE
         value: rift-sandbox:latest
+      - key: CORS_ORIGINS
+        value: https://rift-cicd.vercel.app

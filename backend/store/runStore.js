@@ -106,3 +106,18 @@ module.exports = {
   addSseClient,
   removeSseClient,
 };
+
+// ─── Auto-cleanup: remove completed runs older than 30 minutes ───
+// Prevents memory leaks in long-running production instances
+const CLEANUP_INTERVAL = 10 * 60 * 1000;  // check every 10 min
+const MAX_AGE = 30 * 60 * 1000;            // keep runs for 30 min
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [runId, run] of runs.entries()) {
+    const age = now - new Date(run.createdAt).getTime();
+    if (age > MAX_AGE && run.status !== "running" && run.status !== "pending") {
+      runs.delete(runId);
+    }
+  }
+}, CLEANUP_INTERVAL);

@@ -1,0 +1,25 @@
+# Force consistent line endings across all platforms
+# Prevents CRLF issues when teammates use Windows/Mac/Linux
+
+# Shell scripts MUST use LF (Docker containers run Linux)
+*.sh text eol=lf
+
+# Python files should use LF
+*.py text eol=lf
+
+# Docker files should use LF
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+
+# Config files
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf

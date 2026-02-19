@@ -4,7 +4,7 @@
 # ─────────────────────────────────────────────────────────
 
 # ── Stage 1: Build frontend ──────────────────────────────
-FROM node:20-slim AS frontend-build
+FROM node:22-slim AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
@@ -12,11 +12,11 @@ COPY frontend/ ./
 RUN npm run build
 
 # ── Stage 2: Runtime (Node.js + Python) ──────────────────
-FROM node:20-slim AS backend
+FROM node:22-slim AS backend
 
-# Install Python 3 + Git + Docker CLI (for sandbox)
+# Install Python 3 + Git (Docker CLI not needed in production container)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv git docker.io \
+    python3 python3-pip python3-venv git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

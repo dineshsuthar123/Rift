@@ -1,6 +1,7 @@
 # Environment files
 .env
 .env.*
+!.env.example
 agent/.env
 backend/.env
 
@@ -8,10 +9,24 @@ backend/.env
 __pycache__/
 *.pyc
 .venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 
 # Node
 node_modules/
+dist/
+
+# Workspace temp files
+tmp/
+*.log
 
 # OS
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,11 +1,32 @@
 // ─────────────────────────────────────────────────────────
 // RIFT 2026 — Agent Runner (spawns Python LangGraph agent)
 // ─────────────────────────────────────────────────────────
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs/promises");
 const config = require("../config");
 const logger = require("../utils/logger");
+
+/**
+ * Detect the correct Python command for this system.
+ * Linux/Mac often only have `python3`, Windows has `python`.
+ */
+function detectPythonCommand() {
+  for (const cmd of ["python3", "python"]) {
+    try {
+      execSync(`${cmd} --version`, { stdio: "ignore" });
+      return cmd;
+    } catch {
+      // command not found, try next
+    }
+  }
+  throw new Error(
+    "Python not found. Install Python >= 3.11 and ensure 'python3' or 'python' is on PATH."
+  );
+}
+
+const PYTHON_CMD = detectPythonCommand();
+logger.info(`Using Python command: ${PYTHON_CMD}`);
 
 /**
  * Spawn the Python LangGraph agent as a child process.
@@ -56,7 +77,7 @@ async function runAgent({
     //   python agent.py <repo_path> [team_name] [leader_name] [max_iterations]
     // Also supports --config flag as alternative.
     const proc = spawn(
-      "python",
+      PYTHON_CMD,
       [
         config.agentScriptPath,
         repoPath,

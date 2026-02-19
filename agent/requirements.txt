@@ -8,6 +8,7 @@ langchain-core>=0.3.0
 # ─── LLM Providers ───────────────────────────────
 openai>=1.40.0
 anthropic>=0.34.0
+google-genai>=1.0.0
 
 # ─── API Server ───────────────────────────────────
 flask>=3.0.0
