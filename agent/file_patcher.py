@@ -13,7 +13,10 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
     Apply a single fix to a file in the repository.
     Returns True if the fix was applied successfully.
     """
-    file_path = os.path.join(repo_path, fix["file_path"])
+    # Strip /workspace/ prefix that the Docker sandbox adds to file paths
+    raw_path = fix["file_path"]
+    cleaned = re.sub(r'^/?workspace/', '', raw_path)
+    file_path = os.path.join(repo_path, cleaned)
 
     if not os.path.exists(file_path):
         print(f"[PATCHER] File not found: {file_path}", file=sys.stderr)

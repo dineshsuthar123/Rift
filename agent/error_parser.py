@@ -115,6 +115,9 @@ def parse_errors_json(errors_json_path: str | Path) -> List[ParsedError]:
             continue
 
         file_path = err.get("file", "")
+        # Strip /workspace/ prefix that Docker sandbox adds
+        import re as _re
+        file_path = _re.sub(r'^/?workspace/', '', file_path)
         line_number = err.get("line", 0)
         message = err.get("message", "")
 

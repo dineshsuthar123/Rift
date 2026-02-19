@@ -397,20 +397,21 @@ _calculate_score = calculate_score
 def _build_ci_timeline(state: AgentState) -> list:
     """Build CI/CD timeline for the dashboard."""
     timeline = []
-    # current_iteration is incremented by verify_fix BEFORE save_results runs,
-    # so the actual number of completed iterations is (current_iteration - 1).
     raw_iterations = state.get("current_iteration", 1)
     actual_iterations = max(1, raw_iterations - 1)
     all_passed = state.get("all_passed", False)
+    error_history = state.get("error_count_history", [])
 
     for i in range(1, actual_iterations + 1):
         is_last = i == actual_iterations
         passed = all_passed if is_last else False
+        # Use error_count_history if available for accurate remaining count
+        remaining = error_history[i - 1] if i <= len(error_history) else None
         timeline.append({
             "iteration": i,
             "status": "PASSED" if passed else "FAILED",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "errors_remaining": 0 if (is_last and all_passed) else None,
+            "errors_remaining": remaining if remaining is not None else (0 if (is_last and all_passed) else None),
         })
     return timeline
 
