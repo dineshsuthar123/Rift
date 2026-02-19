@@ -149,9 +149,15 @@ async function runAgent({
       } catch (readErr) {
         // If agent exited non-zero and no results, build a failure result
         if (code !== 0) {
+          // Strip decorative banner lines to show actual error
+          const usefulStderr = stderrBuf
+            .split("\n")
+            .filter((l) => !l.startsWith("###") && !l.startsWith("===") && l.trim())
+            .join("\n")
+            .slice(0, 2000);
           reject(
             new Error(
-              `Agent exited with code ${code}. Stderr: ${stderrBuf.slice(0, 500)}`
+              `Agent exited with code ${code}. Stderr: ${usefulStderr}`
             )
           );
         } else {
