@@ -60,13 +60,19 @@ def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
         if result.stderr:
             print(f"[SANDBOX] stderr: {result.stderr[:500]}", file=sys.stderr)
 
+        # If Docker ran but errors.json was not produced, fall back
+        if not os.path.exists(errors_output):
+            print("[SANDBOX] Docker ran but errors.json not produced. Falling back to local.", file=sys.stderr)
+            return run_local_analysis(repo_path)
+
     except subprocess.TimeoutExpired:
-        print(f"[SANDBOX] Container timed out after {timeout}s", file=sys.stderr)
+        print(f"[SANDBOX] Container timed out after {timeout}s. Falling back to local.", file=sys.stderr)
+        return run_local_analysis(repo_path)
     except FileNotFoundError:
         print("[SANDBOX] Docker not found. Falling back to local execution.", file=sys.stderr)
         return run_local_analysis(repo_path)
     except Exception as e:
-        print(f"[SANDBOX] Error: {e}", file=sys.stderr)
+        print(f"[SANDBOX] Error: {e}. Falling back to local.", file=sys.stderr)
         return run_local_analysis(repo_path)
 
     return errors_output
@@ -108,7 +114,7 @@ def run_local_analysis(repo_path: str) -> str:
     try:
         # Try with pytest-json-report first
         result = subprocess.run(
-            ["python", "-m", "pytest", "--tb=short", "-v", "--no-header"],
+            [sys.executable, "-m", "pytest", "--tb=short", "-v", "--no-header"],
             capture_output=True, text=True,
             cwd=repo_path, timeout=120
         )
