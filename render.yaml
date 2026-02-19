@@ -1,0 +1,26 @@
+# ─────────────────────────────────────────────────────────
+# RIFT 2026 — Render.com Blueprint (render.yaml)
+# Deploy: https://render.com/deploy
+# ─────────────────────────────────────────────────────────
+services:
+  - type: web
+    name: rift-cicd-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
+      - key: GITHUB_TOKEN
+        sync: false  # Set manually in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: groq
+      - key: MAX_ITERATIONS
+        value: 10
+      - key: SANDBOX_IMAGE
+        value: rift-sandbox:latest

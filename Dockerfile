@@ -1,11 +1,20 @@
 # ─────────────────────────────────────────────────────────
-# RIFT 2026 — Backend Dockerfile
-# Multi-stage: Node.js + Python (for agent.py)
+# RIFT 2026 — Production Dockerfile
+# Multi-stage: Frontend build → Node.js + Python runtime
 # ─────────────────────────────────────────────────────────
 
+# ── Stage 1: Build frontend ──────────────────────────────
+FROM node:20-slim AS frontend-build
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ── Stage 2: Runtime (Node.js + Python) ──────────────────
 FROM node:20-slim AS backend
 
-# Install Python 3.11 + Git (needed for simple-git and agent.py)
+# Install Python 3 + Git + Docker CLI (for sandbox)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv git docker.io \
     && rm -rf /var/lib/apt/lists/*
@@ -20,14 +29,19 @@ RUN cd backend && npm ci --omit=dev
 COPY agent/requirements.txt ./agent/
 RUN pip3 install --break-system-packages --no-cache-dir -r agent/requirements.txt
 
-# Copy source
+# Copy source code
 COPY backend/ ./backend/
 COPY agent/ ./agent/
+COPY infrastructure/ ./infrastructure/
+
+# Copy built frontend
+COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 # Working directory for Express
 WORKDIR /app/backend
 
-# Expose port
+# Default port
+ENV PORT=3001
 EXPOSE 3001
 
 # Health check
