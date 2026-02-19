@@ -210,16 +210,16 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
     });
 
     try {
-      await gitService.pushBranch(git, branchName);
+      await gitService.pushBranch(git, branchName, repoUrl);
       store.emitEvent(runId, "progress", {
         phase: "pushed",
         message: "Push complete",
       });
     } catch (pushErr) {
-      logger.warn({ err: pushErr, runId }, "Push failed (may need GITHUB_TOKEN)");
+      logger.warn({ err: pushErr, runId }, "Push failed");
       store.emitEvent(runId, "progress", {
         phase: "push_failed",
-        message: `Push failed: ${pushErr.message}. Ensure GITHUB_TOKEN is set.`,
+        message: `Push failed: ${pushErr.message}`,
       });
     }
   }

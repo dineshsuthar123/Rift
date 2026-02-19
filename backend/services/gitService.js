@@ -84,14 +84,87 @@ async function commitFixes(git, files, message) {
 
 /**
  * Push the branch to origin.
+ * If direct push fails (403 — not a collaborator), automatically:
+ *   1. Fork the repo to the authenticated user's account via GitHub API
+ *   2. Add the fork as a "fork" remote
+ *   3. Push to the fork instead
  *
  * @param {import("simple-git").SimpleGit} git
  * @param {string} branchName
+ * @param {string} [repoUrl] — original repo URL for fork fallback
  */
-async function pushBranch(git, branchName) {
+async function pushBranch(git, branchName, repoUrl) {
   logger.info({ branchName }, "Pushing branch to origin");
-  await git.push("origin", branchName, ["--set-upstream"]);
-  logger.info({ branchName }, "Push complete");
+
+  try {
+    await git.push("origin", branchName, ["--set-upstream", "--verbose", "--porcelain"]);
+    logger.info({ branchName }, "Push complete");
+    return;
+  } catch (err) {
+    const msg = err.message || "";
+    // Only try fork fallback for permission errors
+    if (!msg.includes("403") && !msg.includes("denied") && !msg.includes("Permission")) {
+      throw err;
+    }
+    logger.warn({ branchName }, "Direct push denied — attempting fork-and-push fallback");
+  }
+
+  // ── Fork fallback ──────────────────────────────────────
+  if (!config.githubToken) {
+    throw new Error("Push failed: GITHUB_TOKEN is required to fork and push.");
+  }
+
+  // Parse owner/repo from the URL
+  const match = (repoUrl || "").match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+  if (!match) {
+    // Try to get it from the git remote
+    const remotes = await git.getRemotes(true);
+    const originRemote = remotes.find((r) => r.name === "origin");
+    const remoteUrl = originRemote?.refs?.push || originRemote?.refs?.fetch || "";
+    const m2 = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+    if (!m2) throw new Error("Push failed: cannot determine owner/repo from origin remote.");
+    match[1] = m2[1];
+    match[2] = m2[2];
+  }
+  const [, owner, repo] = [null, match[1], match[2].replace(/\.git$/, "")];
+
+  logger.info({ owner, repo }, "Forking repository via GitHub API");
+
+  // Create fork via GitHub REST API
+  const forkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/forks`, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${config.githubToken}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "RIFT-CI-Agent",
+    },
+    body: JSON.stringify({ default_branch_only: false }),
+  });
+
+  if (!forkRes.ok && forkRes.status !== 202) {
+    const body = await forkRes.text();
+    throw new Error(`Fork API failed (${forkRes.status}): ${body}`);
+  }
+
+  const forkData = await forkRes.json();
+  const forkCloneUrl = forkData.clone_url; // e.g. https://github.com/dineshsuthar123/test.git
+  const forkFullName = forkData.full_name;  // e.g. dineshsuthar123/test
+
+  logger.info({ forkFullName, forkCloneUrl }, "Fork created/exists");
+
+  // Wait a moment for GitHub to finish forking (new forks need a few seconds)
+  await new Promise((r) => setTimeout(r, 3000));
+
+  // Add fork as a remote and push there
+  const authForkUrl = authenticatedUrl(forkCloneUrl);
+  try {
+    await git.removeRemote("fork");
+  } catch { /* remote might not exist yet */ }
+  await git.addRemote("fork", authForkUrl);
+
+  logger.info({ branchName, forkFullName }, "Pushing to fork");
+  await git.push("fork", branchName, ["--set-upstream", "--force"]);
+  logger.info({ branchName, forkFullName }, "Push to fork complete");
 }
 
 /**
