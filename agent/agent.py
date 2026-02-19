@@ -37,6 +37,20 @@ from sandbox_runner import run_sandbox, run_local_analysis
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# JSON Progress Emitter (for Member 1's Node.js backend SSE streaming)
+# ═══════════════════════════════════════════════════════════════════════
+
+def emit_progress(event_type: str, data: dict) -> None:
+    """
+    Emit a JSON-line progress event to stdout.
+    Member 1's agentRunner.js parses each line as JSON and forwards via SSE.
+    """
+    event = {"type": event_type, "data": data}
+    # Use flush=True to ensure immediate delivery
+    print(json.dumps(event), flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Graph State Definition
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -68,8 +82,14 @@ def analyze_logs(state: AgentState) -> dict:
     repo_path = state["repo_path"]
 
     print(f"\n{'='*60}")
-    print(f"[ITERATION {iteration}/{state['max_iterations']}] Analyzing errors...")
-    print(f"{'='*60}")
+    print(f"[ITERATION {iteration}/{state['max_iterations']}] Analyzing errors...", file=sys.stderr)
+    print(f"{'='*60}", file=sys.stderr)
+
+    emit_progress("progress", {
+        "phase": "analyzing",
+        "message": f"Iteration {iteration}/{state['max_iterations']}: Running analysis...",
+        "iteration": iteration,
+    })
 
     # Run the sandbox to produce errors.json
     errors_json_path = run_sandbox(repo_path)
@@ -77,9 +97,24 @@ def analyze_logs(state: AgentState) -> dict:
     # Parse the errors
     errors = parse_errors_json(errors_json_path)
 
-    print(f"[ANALYZE] Found {len(errors)} error(s)")
+    print(f"[ANALYZE] Found {len(errors)} error(s)", file=sys.stderr)
     if errors:
-        print(format_errors_summary(errors))
+        print(format_errors_summary(errors), file=sys.stderr)
+
+    emit_progress("progress", {
+        "phase": "analyzed",
+        "message": f"Found {len(errors)} error(s) in iteration {iteration}",
+        "errors_found": len(errors),
+        "iteration": iteration,
+    })
+
+    # Emit an iteration event for the timeline
+    emit_progress("iteration", {
+        "iteration": iteration,
+        "status": "PASSED" if len(errors) == 0 else "FAILED",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "errors_remaining": len(errors),
+    })
 
     return {
         "error_logs": errors,
@@ -100,16 +135,39 @@ def generate_fix(state: AgentState) -> dict:
     repo_path = state["repo_path"]
 
     if not errors:
-        print("[GENERATE] No errors to fix!")
+        print("[GENERATE] No errors to fix!", file=sys.stderr)
+        emit_progress("progress", {
+            "phase": "generate_complete",
+            "message": "No errors to fix — all tests passing!",
+        })
         return {"final_fixes": state.get("final_fixes", []), "all_passed": True}
 
-    print(f"[GENERATE] Requesting fixes for {len(errors)} error(s) from LLM...")
+    print(f"[GENERATE] Requesting fixes for {len(errors)} error(s) from LLM...", file=sys.stderr)
+    emit_progress("progress", {
+        "phase": "generating",
+        "message": f"Requesting LLM fixes for {len(errors)} error(s)...",
+    })
 
     fixes = generate_fixes(errors, repo_path)
 
-    print(f"[GENERATE] LLM returned {len(fixes)} fix(es)")
+    print(f"[GENERATE] LLM returned {len(fixes)} fix(es)", file=sys.stderr)
     for fix in fixes:
-        print(f"  - {format_fix_for_results(fix)}")
+        result_str = format_fix_for_results(fix)
+        print(f"  - {result_str}", file=sys.stderr)
+        # Emit each fix event for the dashboard fixes table
+        emit_progress("fix", {
+            "file": fix.get("file_path", ""),
+            "bug_type": fix.get("bug_type", "LINTING"),
+            "line_number": fix.get("line_number", 0),
+            "commit_message": fix.get("commit_message", ""),
+            "status": "pending",
+            "description": result_str,
+        })
+
+    emit_progress("progress", {
+        "phase": "generated",
+        "message": f"LLM generated {len(fixes)} fix(es)",
+    })
 
     return {"final_fixes": state.get("final_fixes", []) + fixes}
 
@@ -131,10 +189,14 @@ def apply_fix(state: AgentState) -> dict:
     new_fixes = all_fixes[already_applied:]
 
     if not new_fixes:
-        print("[APPLY] No new fixes to apply.")
+        print("[APPLY] No new fixes to apply.", file=sys.stderr)
         return {"fix_results": existing_results}
 
-    print(f"[APPLY] Applying {len(new_fixes)} fix(es)...")
+    print(f"[APPLY] Applying {len(new_fixes)} fix(es)...", file=sys.stderr)
+    emit_progress("progress", {
+        "phase": "applying",
+        "message": f"Applying {len(new_fixes)} fix(es) to source files...",
+    })
 
     results = apply_all_fixes(repo_path, new_fixes)
 
@@ -147,7 +209,21 @@ def apply_fix(state: AgentState) -> dict:
         }
         new_results.append(result_entry)
         status_icon = "✓" if success else "✗"
-        print(f"  {status_icon} {result_entry['result_string']}")
+        print(f"  {status_icon} {result_entry['result_string']}", file=sys.stderr)
+        # Emit fix status update
+        emit_progress("fix", {
+            "file": fix.get("file_path", ""),
+            "bug_type": fix.get("bug_type", "LINTING"),
+            "line_number": fix.get("line_number", 0),
+            "commit_message": fix.get("commit_message", ""),
+            "status": "fixed" if success else "failed",
+            "description": result_entry['result_string'],
+        })
+
+    emit_progress("progress", {
+        "phase": "applied",
+        "message": f"Applied {sum(1 for _, s in results if s)}/{len(new_fixes)} fix(es) successfully",
+    })
 
     return {"fix_results": existing_results + new_results}
 
@@ -164,7 +240,12 @@ def verify_fix(state: AgentState) -> dict:
     """
     iteration = state["current_iteration"]
 
-    print(f"[VERIFY] Iteration {iteration} complete.")
+    print(f"[VERIFY] Iteration {iteration} complete.", file=sys.stderr)
+    emit_progress("progress", {
+        "phase": "verifying",
+        "message": f"Iteration {iteration} complete, preparing next cycle...",
+        "iteration": iteration,
+    })
 
     return {
         "current_iteration": iteration + 1,
@@ -217,7 +298,7 @@ def save_results(state: AgentState) -> dict:
         "branch_name": branch_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_time_seconds": round(elapsed, 2),
-        "iterations_used": state.get("current_iteration", 1),
+        "iterations_used": max(1, state.get("current_iteration", 1) - 1),
         "max_iterations": state.get("max_iterations", MAX_ITERATIONS),
         "all_tests_passed": all_passed,
         "ci_status": "PASSED" if all_passed else "FAILED",
@@ -228,7 +309,7 @@ def save_results(state: AgentState) -> dict:
         },
         "score": _calculate_score(
             total_fixes, successful_fixes, elapsed,
-            state.get("current_iteration", 1)
+            max(1, state.get("current_iteration", 1) - 1)
         ),
         "fixes": fixes_output,
         "ci_timeline": _build_ci_timeline(state),
@@ -239,13 +320,20 @@ def save_results(state: AgentState) -> dict:
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\n{'='*60}")
-    print(f"[RESULTS] Saved to {results_path}")
-    print(f"[RESULTS] CI Status: {'PASSED ✓' if all_passed else 'FAILED ✗'}")
-    print(f"[RESULTS] Fixes: {successful_fixes}/{total_fixes} applied")
-    print(f"[RESULTS] Time: {elapsed:.1f}s")
-    print(f"[RESULTS] Score: {results['score']['final_score']}")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"[RESULTS] Saved to {results_path}", file=sys.stderr)
+    print(f"[RESULTS] CI Status: {'PASSED ✓' if all_passed else 'FAILED ✗'}", file=sys.stderr)
+    print(f"[RESULTS] Fixes: {successful_fixes}/{total_fixes} applied", file=sys.stderr)
+    print(f"[RESULTS] Time: {elapsed:.1f}s", file=sys.stderr)
+    print(f"[RESULTS] Score: {results['score']['final_score']}", file=sys.stderr)
+    print(f"{'='*60}\n", file=sys.stderr)
+
+    # Emit final progress event
+    emit_progress("progress", {
+        "phase": "complete",
+        "message": f"Agent complete: {'PASSED' if all_passed else 'FAILED'} ({successful_fixes}/{total_fixes} fixes)",
+        "ci_status": results["ci_status"],
+    })
 
     return {"all_passed": all_passed}
 
@@ -259,7 +347,7 @@ def should_continue(state: AgentState) -> str:
     if state.get("all_passed", False):
         return "save_results"
     if state["current_iteration"] >= state["max_iterations"]:
-        print(f"[AGENT] Max iterations ({state['max_iterations']}) reached. Saving results.")
+        print(f"[AGENT] Max iterations ({state['max_iterations']}) reached. Saving results.", file=sys.stderr)
         return "save_results"
     return "analyze_logs"
 
@@ -276,14 +364,20 @@ _calculate_score = calculate_score
 def _build_ci_timeline(state: AgentState) -> list:
     """Build CI/CD timeline for the dashboard."""
     timeline = []
-    iterations = state.get("current_iteration", 1)
-    for i in range(1, iterations + 1):
-        is_last = i == iterations
-        passed = state.get("all_passed", False) if is_last else False
+    # current_iteration is incremented by verify_fix BEFORE save_results runs,
+    # so the actual number of completed iterations is (current_iteration - 1).
+    raw_iterations = state.get("current_iteration", 1)
+    actual_iterations = max(1, raw_iterations - 1)
+    all_passed = state.get("all_passed", False)
+
+    for i in range(1, actual_iterations + 1):
+        is_last = i == actual_iterations
+        passed = all_passed if is_last else False
         timeline.append({
             "iteration": i,
             "status": "PASSED" if passed else "FAILED",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "errors_remaining": 0 if (is_last and all_passed) else None,
         })
     return timeline
 
@@ -346,13 +440,13 @@ def run_agent(
     
     Returns the results dict (also saved to results.json).
     """
-    print(f"\n{'#'*60}")
-    print(f"# CI/CD HEALING AGENT — RIFT 2026")
-    print(f"# Repo: {repo_path}")
-    print(f"# Team: {team_name}")
-    print(f"# Leader: {leader_name}")
-    print(f"# Max Iterations: {max_iterations}")
-    print(f"{'#'*60}\n")
+    print(f"\n{'#'*60}", file=sys.stderr)
+    print(f"# CI/CD HEALING AGENT — RIFT 2026", file=sys.stderr)
+    print(f"# Repo: {repo_path}", file=sys.stderr)
+    print(f"# Team: {team_name}", file=sys.stderr)
+    print(f"# Leader: {leader_name}", file=sys.stderr)
+    print(f"# Max Iterations: {max_iterations}", file=sys.stderr)
+    print(f"{'#'*60}\n", file=sys.stderr)
 
     # Build and run the graph
     app = build_graph()
@@ -388,15 +482,31 @@ def run_agent(
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python agent.py <repo_path> [team_name] [leader_name] [max_iterations]")
-        print("Example: python agent.py /workspace \"RIFT ORGANISERS\" \"Saiyam Kumar\" 5")
+    # Support both positional args and --config flag
+    if len(sys.argv) >= 2 and sys.argv[1] == "--config":
+        # --config mode: read config from JSON file
+        if len(sys.argv) < 3:
+            print("Usage: python agent.py --config <config.json>", file=sys.stderr)
+            sys.exit(1)
+        config_path = sys.argv[2]
+        with open(config_path, "r") as f:
+            cfg = json.load(f)
+        repo = cfg.get("repo_path", "")
+        team = cfg.get("team_name", "TEAM")
+        leader = cfg.get("leader_name", "LEADER")
+        max_iter = cfg.get("max_iterations", MAX_ITERATIONS)
+    elif len(sys.argv) < 2:
+        print("Usage: python agent.py <repo_path> [team_name] [leader_name] [max_iterations]", file=sys.stderr)
+        print("   or: python agent.py --config <config.json>", file=sys.stderr)
+        print("Example: python agent.py /workspace \"RIFT ORGANISERS\" \"Saiyam Kumar\" 5", file=sys.stderr)
         sys.exit(1)
-
-    repo = sys.argv[1]
-    team = sys.argv[2] if len(sys.argv) > 2 else "TEAM"
-    leader = sys.argv[3] if len(sys.argv) > 3 else "LEADER"
-    max_iter = int(sys.argv[4]) if len(sys.argv) > 4 else MAX_ITERATIONS
+    else:
+        # Positional args mode
+        repo = sys.argv[1]
+        team = sys.argv[2] if len(sys.argv) > 2 else "TEAM"
+        leader = sys.argv[3] if len(sys.argv) > 3 else "LEADER"
+        max_iter = int(sys.argv[4]) if len(sys.argv) > 4 else MAX_ITERATIONS
 
     result = run_agent(repo, team, leader, max_iter)
-    print(json.dumps(result, indent=2))
+    # Final result as JSON on stdout (agentRunner.js reads results.json file instead)
+    print(json.dumps(result, indent=2), file=sys.stderr)

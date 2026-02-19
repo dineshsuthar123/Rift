@@ -1,0 +1,6 @@
+# Force shell scripts and Python files to use LF line endings
+# This prevents Windows CRLF from breaking the Docker sandbox
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf

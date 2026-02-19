@@ -6,6 +6,7 @@ This is the integration point with Member 3's Docker setup.
 import json
 import subprocess
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -40,7 +41,7 @@ def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
             DOCKER_IMAGE
         ]
 
-        print(f"[SANDBOX] Running: {' '.join(cmd)}")
+        print(f"[SANDBOX] Running: {' '.join(cmd)}", file=sys.stderr)
         start = time.time()
 
         result = subprocess.run(
@@ -52,20 +53,20 @@ def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
         )
 
         elapsed = time.time() - start
-        print(f"[SANDBOX] Container finished in {elapsed:.1f}s (exit code: {result.returncode})")
+        print(f"[SANDBOX] Container finished in {elapsed:.1f}s (exit code: {result.returncode})", file=sys.stderr)
 
         if result.stdout:
-            print(f"[SANDBOX] stdout: {result.stdout[:500]}")
+            print(f"[SANDBOX] stdout: {result.stdout[:500]}", file=sys.stderr)
         if result.stderr:
-            print(f"[SANDBOX] stderr: {result.stderr[:500]}")
+            print(f"[SANDBOX] stderr: {result.stderr[:500]}", file=sys.stderr)
 
     except subprocess.TimeoutExpired:
-        print(f"[SANDBOX] Container timed out after {timeout}s")
+        print(f"[SANDBOX] Container timed out after {timeout}s", file=sys.stderr)
     except FileNotFoundError:
-        print("[SANDBOX] Docker not found. Falling back to local execution.")
+        print("[SANDBOX] Docker not found. Falling back to local execution.", file=sys.stderr)
         return run_local_analysis(repo_path)
     except Exception as e:
-        print(f"[SANDBOX] Error: {e}")
+        print(f"[SANDBOX] Error: {e}", file=sys.stderr)
         return run_local_analysis(repo_path)
 
     return errors_output
@@ -91,16 +92,17 @@ def run_local_analysis(repo_path: str) -> str:
                 ruff_errors = json.loads(result.stdout)
                 for err in ruff_errors:
                     errors.append({
+                        "type": "LINTING",
                         "file": err.get("filename", "").replace(os.path.abspath(repo_path) + os.sep, "").replace("\\", "/"),
                         "line": err.get("location", {}).get("row", 0),
                         "message": f"{err.get('code', '')} {err.get('message', '')}",
                         "source": "ruff",
-                        "rule_code": err.get("code", "")
+                        "code": err.get("code", "")
                     })
             except json.JSONDecodeError:
                 pass
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"[LOCAL] Ruff not available: {e}")
+        print(f"[LOCAL] Ruff not available: {e}", file=sys.stderr)
 
     # ─── Run pytest ───────────────────────────────────────────────
     try:
@@ -115,13 +117,13 @@ def run_local_analysis(repo_path: str) -> str:
             errors.extend(_parse_pytest_output(result.stdout + "\n" + result.stderr, repo_path))
 
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"[LOCAL] Pytest error: {e}")
+        print(f"[LOCAL] Pytest error: {e}", file=sys.stderr)
 
     # ─── Write errors.json ────────────────────────────────────────
     with open(errors_output, "w", encoding="utf-8") as f:
         json.dump(errors, f, indent=2)
 
-    print(f"[LOCAL] Found {len(errors)} errors, written to {errors_output}")
+    print(f"[LOCAL] Found {len(errors)} errors, written to {errors_output}", file=sys.stderr)
     return errors_output
 
 
@@ -151,10 +153,12 @@ def _parse_pytest_output(output: str, repo_path: str) -> list:
         message = match.group(3).strip()
 
         errors.append({
+            "type": "LOGIC",
             "file": file_path,
             "line": line,
             "message": message,
-            "source": "pytest"
+            "source": "pytest",
+            "code": ""
         })
 
     # If no traceback matches, try FAILED lines
@@ -163,10 +167,12 @@ def _parse_pytest_output(output: str, repo_path: str) -> list:
             file_path = match.group(1).replace("\\", "/")
             message = match.group(3) or f"Test {match.group(2)} failed"
             errors.append({
+                "type": "LOGIC",
                 "file": file_path,
                 "line": 1,
                 "message": message,
-                "source": "pytest"
+                "source": "pytest",
+                "code": ""
             })
 
     return errors

@@ -34,7 +34,7 @@ async function runAgent({
   maxIterations = config.maxIterations,
   onProgress = () => {},
 }) {
-  // 1. Write config file for agent.py to read
+  // 1. Write config file for debugging/reference
   const agentConfig = {
     repo_path: repoPath,
     repo_url: repoUrl,
@@ -42,8 +42,6 @@ async function runAgent({
     leader_name: leaderName,
     branch_name: branchName,
     max_iterations: maxIterations,
-    anthropic_api_key: config.anthropicApiKey,
-    google_api_key: config.googleApiKey,
     sandbox_image: config.sandboxImage,
     sandbox_timeout: config.sandboxTimeout,
   };
@@ -54,15 +52,28 @@ async function runAgent({
   logger.info({ configPath, agentScript: config.agentScriptPath }, "Launching Python agent");
 
   return new Promise((resolve, reject) => {
+    // Use positional args matching agent.py CLI:
+    //   python agent.py <repo_path> [team_name] [leader_name] [max_iterations]
+    // Also supports --config flag as alternative.
     const proc = spawn(
       "python",
-      [config.agentScriptPath, "--config", configPath],
+      [
+        config.agentScriptPath,
+        repoPath,
+        teamName,
+        leaderName,
+        String(maxIterations),
+      ],
       {
         cwd: repoPath,
         env: {
           ...process.env,
-          ANTHROPIC_API_KEY: config.anthropicApiKey,
-          GOOGLE_API_KEY: config.googleApiKey,
+          ANTHROPIC_API_KEY: config.anthropicApiKey || "",
+          GOOGLE_API_KEY: config.googleApiKey || "",
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+          DOCKER_IMAGE: config.sandboxImage || "rift-sandbox:latest",
+          DOCKER_TIMEOUT: String(Math.floor((config.sandboxTimeout || 120000) / 1000)),
+          LLM_PROVIDER: process.env.LLM_PROVIDER || "anthropic",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }

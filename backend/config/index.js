@@ -13,6 +13,8 @@ const config = {
   // AI Keys (passed through to Python agent)
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
   googleApiKey: process.env.GOOGLE_API_KEY || "",
+  openaiApiKey: process.env.OPENAI_API_KEY || "",
+  llmProvider: process.env.LLM_PROVIDER || "anthropic",
 
   // Agent
   workspaceDir: path.resolve(

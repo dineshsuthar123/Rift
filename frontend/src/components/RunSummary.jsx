@@ -62,7 +62,7 @@ function InfoRow({ label, value, mono = false, highlight = false }) {
           mono ? "font-mono text-gray-300" : "text-white"
         } ${highlight ? "text-lg font-bold text-cyan-300" : ""}`}
       >
-        {value || "—"}
+        {value != null && value !== "" ? String(value) : "—"}
       </span>
     </div>
   );

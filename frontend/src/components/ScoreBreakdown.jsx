@@ -8,8 +8,13 @@ export default function ScoreBreakdown() {
 
   if (!state.score) return null;
 
-  const { baseScore, accuracyRate, speedBonus, efficiencyPenalty, finalScore } =
-    state.score;
+  // Support both camelCase (backend) and snake_case (agent) score formats
+  const s = state.score;
+  const baseScore = s.baseScore ?? s.base_score ?? 0;
+  const accuracyRate = s.accuracyRate ?? s.accuracy_rate ?? 100;
+  const speedBonus = s.speedBonus ?? s.speed_bonus ?? 0;
+  const efficiencyPenalty = s.efficiencyPenalty ?? s.efficiency_penalty ?? 0;
+  const finalScore = s.finalScore ?? s.final_score ?? 0;
 
   // Progress bar percentage (cap at 110 max, since 100 + 10 speed bonus)
   const barPct = Math.min(100, (finalScore / 110) * 100);

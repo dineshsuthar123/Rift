@@ -19,6 +19,27 @@ const store = require("../store/runStore");
 const router = Router();
 
 /**
+ * Normalize score from agent (snake_case) to match frontend expectations (camelCase).
+ * Falls back to backend-calculated score if agent score is missing.
+ */
+function normalizeScore(agentScore, backendScore, totalErrors, fixesPassed) {
+  const src = agentScore || backendScore;
+  if (!src) return backendScore;
+
+  const accuracyRate = totalErrors > 0
+    ? Math.round((fixesPassed / totalErrors) * 10000) / 100
+    : 100;
+
+  return {
+    baseScore: src.baseScore ?? src.base_score ?? 100,
+    accuracyRate: src.accuracyRate ?? src.accuracy_rate ?? accuracyRate,
+    speedBonus: src.speedBonus ?? src.speed_bonus ?? 0,
+    efficiencyPenalty: src.efficiencyPenalty ?? src.efficiency_penalty ?? 0,
+    finalScore: src.finalScore ?? src.final_score ?? 0,
+  };
+}
+
+/**
  * POST /api/analyze
  *
  * Accepts:
@@ -160,8 +181,9 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
   let commitCount = 0;
   if (modifiedFiles.length > 0) {
     // Batch all fixes into one commit per run for efficiency
-    const fixSummary = agentResults.fixes
-      ? agentResults.fixes
+    const agentFixes = agentResults.fixes || [];
+    const fixSummary = agentFixes.length > 0
+      ? agentFixes
           .map((f) => `${f.bug_type} in ${f.file}`)
           .slice(0, 5)
           .join(", ")
@@ -172,7 +194,7 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
       modifiedFiles,
       `Applied ${modifiedFiles.length} fix(es): ${fixSummary}`
     );
-    commitCount = agentResults.commit_count || 1;
+    commitCount = agentResults.iterations_used || agentResults.commit_count || 1;
 
     store.emitEvent(runId, "progress", {
       phase: "committed",
@@ -203,10 +225,21 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
 
   // ── Phase 5: Calculate score ──────────────────────────
   const timing = timer.stop();
-  const totalErrors = agentResults.total_errors || 0;
+
+  // Map from agent's results.json schema to our internal schema
+  // Agent outputs: ci_status, summary.total_failures_detected, ci_timeline
+  // We need: status, total_errors, total_fixes, timeline
+  const agentSummary = agentResults.summary || {};
+  const totalErrors =
+    agentSummary.total_failures_detected ||
+    agentResults.total_errors ||
+    0;
   const fixesPassed =
+    agentSummary.total_fixes_applied ||
     agentResults.total_fixes ||
-    (agentResults.fixes ? agentResults.fixes.filter((f) => f.status === "fixed").length : 0);
+    (agentResults.fixes
+      ? agentResults.fixes.filter((f) => f.status === "fixed").length
+      : 0);
 
   const score = calculateScore({
     totalErrors,
@@ -216,10 +249,15 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
   });
 
   // ── Phase 6: Build final results ─────────────────────
-  const finalStatus = agentResults.status === "PASSED" ? "passed" : "failed";
+  // Agent uses ci_status (PASSED/FAILED), map to our format
+  const agentStatus =
+    agentResults.ci_status || agentResults.status || (fixesPassed === totalErrors ? "PASSED" : "FAILED");
+
+  // Agent uses ci_timeline, map to timeline
+  const agentTimeline = agentResults.ci_timeline || agentResults.timeline || [];
 
   const resultPayload = {
-    status: agentResults.status || (fixesPassed === totalErrors ? "PASSED" : "FAILED"),
+    status: agentStatus,
     repo_url: repoUrl,
     team_name: teamName,
     leader_name: leaderName,
@@ -227,9 +265,9 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
     total_errors: totalErrors,
     total_fixes: fixesPassed,
     fixes: agentResults.fixes || [],
-    timeline: agentResults.timeline || [],
+    timeline: agentTimeline,
     commit_count: commitCount,
-    score,
+    score: normalizeScore(agentResults.score, score, totalErrors, fixesPassed),
     timing: {
       started_at: timing.startedAt,
       ended_at: timing.endedAt,
@@ -240,22 +278,23 @@ async function executePipeline(runId, { repoUrl, teamName, leaderName, branchNam
 
   // Update store with final data
   store.updateRun(runId, {
-    status: finalStatus,
+    status: agentStatus === "PASSED" ? "passed" : "failed",
     results: resultPayload,
-    score,
+    score: resultPayload.score,
     timing,
-    timeline: agentResults.timeline || [],
+    timeline: agentTimeline,
     fixes: agentResults.fixes || [],
   });
 
   // Emit completion event
   store.emitEvent(runId, "complete", resultPayload);
 
+  const finalStatus = agentStatus === "PASSED" ? "passed" : "failed";
   logger.info(
     {
       runId,
       status: finalStatus,
-      score: score.finalScore,
+      score: resultPayload.score.final_score || resultPayload.score.finalScore,
       elapsed: `${timing.elapsedSec}s`,
       errors: totalErrors,
       fixed: fixesPassed,

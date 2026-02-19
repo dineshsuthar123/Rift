@@ -22,7 +22,7 @@ RESULTS_JSON_PATH = WORKSPACE_DIR / "results.json"
 VALID_BUG_TYPES = {"LINTING", "SYNTAX", "LOGIC", "TYPE_ERROR", "IMPORT", "INDENTATION"}
 
 # ─── Docker Configuration ────────────────────────────────────────────
-DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "cicd-sandbox:latest")
+DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "rift-sandbox:latest")
 DOCKER_TIMEOUT = int(os.getenv("DOCKER_TIMEOUT", "120"))  # seconds
 
 # ─── Git Configuration ───────────────────────────────────────────────

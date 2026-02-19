@@ -26,7 +26,13 @@ def classify_bug_type(error: dict) -> str:
     """
     source = error.get("source", "").lower()
     message = error.get("message", "").lower()
-    rule = error.get("rule_code", "").upper()
+    # M3's parse_logs.py outputs 'code', support both 'code' and 'rule_code'
+    rule = (error.get("code") or error.get("rule_code") or "").upper()
+
+    # If M3 already classified the type, trust it if valid
+    existing_type = error.get("type", "")
+    if existing_type in VALID_BUG_TYPES:
+        return existing_type
 
     # ─── Ruff-based classification ────────────────────────────────
     if source == "ruff":
@@ -122,7 +128,7 @@ def parse_errors_json(errors_json_path: str | Path) -> List[ParsedError]:
             line_number=int(line_number),
             bug_type=bug_type,
             raw_message=message,
-            rule_code=err.get("rule_code"),
+            rule_code=err.get("code") or err.get("rule_code"),
         ))
 
     return parsed
