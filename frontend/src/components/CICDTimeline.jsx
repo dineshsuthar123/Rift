@@ -8,7 +8,7 @@ export default function CICDTimeline() {
 
   if (state.timeline.length === 0 && state.status !== "running") return null;
 
-  const maxIterations = 5;
+  const maxIterations = state.maxIterations || 50;
 
   return (
     <section className="bg-gray-900 rounded-2xl p-6 border border-gray-800 shadow-lg">

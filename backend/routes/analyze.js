@@ -67,6 +67,7 @@ router.post("/analyze", validate(analyzeSchema), async (req, res) => {
     run_id: runId,
     status: "started",
     branch_name: branchName,
+    max_iterations: config.maxIterations,
     sse_url: `/api/status/${runId}`,
     results_url: `/api/results/${runId}`,
   });

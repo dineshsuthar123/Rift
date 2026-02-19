@@ -67,6 +67,9 @@ class AgentState(TypedDict):
     all_passed: bool
     start_time: float
     errors_json_path: str
+    total_errors_detected: int  # Total errors found by sandbox across all runs
+    error_count_history: List[int]  # Track error counts per iteration for convergence
+    stagnant_count: int  # How many consecutive iterations with no improvement
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -116,9 +119,27 @@ def analyze_logs(state: AgentState) -> dict:
         "errors_remaining": len(errors),
     })
 
+    # Track the highest error count detected across all iterations
+    prev_total = state.get("total_errors_detected", 0)
+    new_total = max(prev_total, len(errors))
+
+    # Track error count history for convergence detection
+    history = list(state.get("error_count_history", []))
+    history.append(len(errors))
+
+    # Check stagnation: if error count hasn't improved in recent iterations
+    stagnant = state.get("stagnant_count", 0)
+    if len(history) >= 2 and history[-1] >= history[-2]:
+        stagnant += 1
+    else:
+        stagnant = 0  # Reset if we made progress
+
     return {
         "error_logs": errors,
         "errors_json_path": errors_json_path,
+        "total_errors_detected": new_total,
+        "error_count_history": history,
+        "stagnant_count": stagnant,
     }
 
 
@@ -285,7 +306,8 @@ def save_results(state: AgentState) -> dict:
             "fix_description": result.get("fix_description", ""),
         })
 
-    # Count stats
+    # Count stats — use actual sandbox error count, not just fix count
+    total_errors_detected = state.get("total_errors_detected", 0)
     total_fixes = len(fixes_output)
     successful_fixes = sum(1 for f in fixes_output if f["status"] == "fixed")
     failed_fixes = total_fixes - successful_fixes
@@ -303,7 +325,7 @@ def save_results(state: AgentState) -> dict:
         "all_tests_passed": all_passed,
         "ci_status": "PASSED" if all_passed else "FAILED",
         "summary": {
-            "total_failures_detected": total_fixes,
+            "total_failures_detected": total_errors_detected,
             "total_fixes_applied": successful_fixes,
             "total_fixes_failed": failed_fixes,
         },
@@ -349,6 +371,17 @@ def should_continue(state: AgentState) -> str:
     if state["current_iteration"] >= state["max_iterations"]:
         print(f"[AGENT] Max iterations ({state['max_iterations']}) reached. Saving results.", file=sys.stderr)
         return "save_results"
+
+    # Convergence detection: stop if errors haven't decreased for 3+ iterations
+    stagnant = state.get("stagnant_count", 0)
+    if stagnant >= 3:
+        print(f"[AGENT] Convergence detected: errors unchanged for {stagnant} iterations. Stopping early.", file=sys.stderr)
+        emit_progress("progress", {
+            "phase": "converged",
+            "message": f"Stopping early: errors unchanged for {stagnant} consecutive iterations",
+        })
+        return "save_results"
+
     return "analyze_logs"
 
 
@@ -463,6 +496,9 @@ def run_agent(
         "all_passed": False,
         "start_time": time.time(),
         "errors_json_path": "",
+        "total_errors_detected": 0,
+        "error_count_history": [],
+        "stagnant_count": 0,
     }
 
     # Execute the graph

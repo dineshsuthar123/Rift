@@ -8,6 +8,15 @@ export default function RunSummary() {
 
   if (state.status === "idle") return null;
 
+  // Compute live counts during run (totalErrors/totalFixes only populate on COMPLETE)
+  const liveErrors = state.totalErrors ||
+    (state.timeline.length > 0
+      ? Math.max(...state.timeline.map(t => t.errors_remaining ?? 0))
+      : 0);
+  const liveFixes = state.totalFixes ||
+    state.fixes.filter(f => f.status === "fixed").length;
+  const liveCommits = state.commitCount || state.timeline.length;
+
   const statusBadge = {
     loading: { text: "STARTING", color: "bg-yellow-500" },
     running: { text: "RUNNING", color: "bg-blue-500 animate-pulse" },
@@ -40,11 +49,11 @@ export default function RunSummary() {
         <InfoRow label="Branch" value={state.branchName} mono />
         <InfoRow
           label="Failures Detected"
-          value={state.totalErrors}
+          value={liveErrors}
           highlight
         />
-        <InfoRow label="Fixes Applied" value={state.totalFixes} highlight />
-        <InfoRow label="Commits" value={state.commitCount} />
+        <InfoRow label="Fixes Applied" value={liveFixes} highlight />
+        <InfoRow label="Commits" value={liveCommits} />
         <InfoRow label="Total Time" value={elapsed} />
       </div>
     </section>

@@ -31,6 +31,7 @@ export default function InputSection() {
         type: "START_RUN",
         runId: result.run_id,
         branchName: result.branch_name,
+        maxIterations: result.max_iterations || 50,
       });
 
       // 2. Connect to SSE stream

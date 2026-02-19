@@ -16,6 +16,7 @@ const initialState = {
   runId: null,
   status: "idle", // idle | loading | running | passed | failed | error
   branchName: "",
+  maxIterations: 50,
 
   // Progress
   progressMessages: [],
@@ -43,6 +44,7 @@ function reducer(state, action) {
         ...state,
         runId: action.runId,
         branchName: action.branchName,
+        maxIterations: action.maxIterations || state.maxIterations,
         status: "running",
         progressMessages: [],
         fixes: [],
