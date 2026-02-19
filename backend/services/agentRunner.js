@@ -71,9 +71,10 @@ async function runAgent({
           ANTHROPIC_API_KEY: config.anthropicApiKey || "",
           GOOGLE_API_KEY: config.googleApiKey || "",
           OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+          GROQ_API_KEY: process.env.GROQ_API_KEY || "",
           DOCKER_IMAGE: config.sandboxImage || "rift-sandbox:latest",
           DOCKER_TIMEOUT: String(Math.floor((config.sandboxTimeout || 120000) / 1000)),
-          LLM_PROVIDER: process.env.LLM_PROVIDER || "anthropic",
+          LLM_PROVIDER: process.env.LLM_PROVIDER || "groq",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
