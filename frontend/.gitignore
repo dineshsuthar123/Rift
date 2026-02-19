@@ -3,3 +3,5 @@ node_modules/
 tmp/
 *.log
 dist/
+.vercel
+.env*.local

@@ -4,7 +4,7 @@
   "installCommand": "npm install",
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://rift-backend.onrender.com/api/:path*" }
+    { "source": "/api/:path*", "destination": "https://rift-cicd-agent.onrender.com/api/:path*" }
   ],
   "headers": [
     {
