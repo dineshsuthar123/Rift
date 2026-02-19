@@ -11,7 +11,8 @@ from typing import List, Dict, Any, Optional
 from error_parser import ParsedError, format_error_for_llm
 from config import (
     LLM_PROVIDER, OPENAI_API_KEY, OPENAI_MODEL,
-    ANTHROPIC_API_KEY, ANTHROPIC_MODEL, VALID_BUG_TYPES, COMMIT_PREFIX
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL, VALID_BUG_TYPES, COMMIT_PREFIX,
+    GROQ_API_KEY, GROQ_MODEL, GOOGLE_API_KEY, GOOGLE_MODEL
 )
 
 
@@ -126,16 +127,82 @@ def call_anthropic(system_prompt: str, user_prompt: str) -> str:
         return f'[LLM_ERROR] {e}'
 
 
-def call_llm(system_prompt: str, user_prompt: str) -> str:
-    """Route to the configured LLM provider."""
-    if LLM_PROVIDER == "anthropic" and ANTHROPIC_API_KEY:
-        return call_anthropic(system_prompt, user_prompt)
-    elif OPENAI_API_KEY:
-        return call_openai(system_prompt, user_prompt)
-    else:
-        raise RuntimeError(
-            "No LLM API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY."
+def call_groq(system_prompt: str, user_prompt: str) -> str:
+    """Call Groq API (OpenAI-compatible)."""
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
         )
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=4096,
+        )
+        return response.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[LLM] Groq error: {e}", file=__import__('sys').stderr)
+        return f'[LLM_ERROR] Groq: {e}'
+
+
+def call_google(system_prompt: str, user_prompt: str) -> str:
+    """Call Google Gemini API."""
+    try:
+        from google import genai
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model=GOOGLE_MODEL,
+            contents=f"{system_prompt}\n\n{user_prompt}",
+        )
+        return response.text or ""
+    except Exception as e:
+        print(f"[LLM] Google error: {e}", file=__import__('sys').stderr)
+        return f'[LLM_ERROR] Google: {e}'
+
+
+def call_llm(system_prompt: str, user_prompt: str) -> str:
+    """Route to the configured LLM provider with fallback chain."""
+    # Build ordered fallback chain based on configured provider
+    providers = []
+    if LLM_PROVIDER == "groq" and GROQ_API_KEY:
+        providers.append(("groq", call_groq))
+    if LLM_PROVIDER == "google" and GOOGLE_API_KEY:
+        providers.append(("google", call_google))
+    if LLM_PROVIDER == "anthropic" and ANTHROPIC_API_KEY:
+        providers.append(("anthropic", call_anthropic))
+    if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
+        providers.append(("openai", call_openai))
+
+    # Add non-primary providers as fallbacks
+    if GROQ_API_KEY and not any(n == "groq" for n, _ in providers):
+        providers.append(("groq", call_groq))
+    if GOOGLE_API_KEY and not any(n == "google" for n, _ in providers):
+        providers.append(("google", call_google))
+    if ANTHROPIC_API_KEY and not any(n == "anthropic" for n, _ in providers):
+        providers.append(("anthropic", call_anthropic))
+    if OPENAI_API_KEY and not any(n == "openai" for n, _ in providers):
+        providers.append(("openai", call_openai))
+
+    if not providers:
+        raise RuntimeError(
+            "No LLM API key configured. Set GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY."
+        )
+
+    for name, fn in providers:
+        import sys
+        print(f"[LLM] Trying {name}...", file=sys.stderr)
+        result = fn(system_prompt, user_prompt)
+        if not result.startswith("[LLM_ERROR]"):
+            print(f"[LLM] {name} succeeded", file=sys.stderr)
+            return result
+        print(f"[LLM] {name} failed, trying next...", file=sys.stderr)
+
+    return result  # Return last error
 
 
 def parse_llm_response(raw_response: str) -> List[Dict[str, Any]]:
@@ -194,10 +261,48 @@ def normalize_fix(fix: Dict[str, Any]) -> Dict[str, Any]:
     return fix
 
 
+def _generate_import_fix(err: ParsedError) -> Optional[Dict[str, Any]]:
+    """Rule-based fallback: generate a fix for common import errors without LLM."""
+    msg = err.get("raw_message", "")
+    file_path = err.get("file_path", "")
+    line_number = err.get("line_number", 0)
+
+    # F401 — unused import
+    m = re.search(r"`?([\w.]+)`?\s+imported but unused", msg)
+    if m:
+        unused = m.group(1)
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "IMPORT",
+            "fix_description": f"remove unused import {unused}",
+            "original_code": "",   # will be filled by apply step
+            "fixed_code": "",
+            "commit_message": f"{COMMIT_PREFIX} Remove unused import {unused} in {file_path}",
+        }
+
+    # E302 / E303 — expected blank lines
+    m = re.search(r"expected (\d+) blank lines?", msg)
+    if m:
+        count = int(m.group(1))
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "LINTING",
+            "fix_description": f"add {count} blank line(s) before this definition",
+            "original_code": "",
+            "fixed_code": "",
+            "commit_message": f"{COMMIT_PREFIX} Fix blank line spacing in {file_path}",
+        }
+
+    return None
+
+
 def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, Any]]:
     """
     Main entry point: takes parsed errors, asks the LLM for fixes,
     and returns a validated list of fix objects.
+    Falls back to rule-based fixes for common patterns when LLM fails.
     """
     if not errors:
         return []
@@ -212,6 +317,17 @@ def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, 
         fix = normalize_fix(fix)
         if validate_fix(fix):
             validated.append(fix)
+
+    # Fallback: if LLM returned 0 fixes, try rule-based fixes
+    if not validated:
+        import sys
+        print(f"[FIX_GEN] LLM returned 0 fixes, trying rule-based fallback for {len(errors)} errors", file=sys.stderr)
+        for err in errors:
+            rule_fix = _generate_import_fix(err)
+            if rule_fix:
+                validated.append(rule_fix)
+        if validated:
+            print(f"[FIX_GEN] Rule-based fallback generated {len(validated)} fix(es)", file=sys.stderr)
 
     return validated
 
