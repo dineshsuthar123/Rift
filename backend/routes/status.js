@@ -24,8 +24,9 @@ router.get("/status/:runId", (req, res) => {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "X-Accel-Buffering": "no", // disable nginx buffering
+    "X-Accel-Buffering": "no", // disable nginx/proxy buffering
   });
+  res.flushHeaders(); // Force headers out immediately (critical for proxied SSE)
 
   // Send a comment to keep the connection alive
   res.write(":ok\n\n");
@@ -38,8 +39,14 @@ router.get("/status/:runId", (req, res) => {
   // Register for future events
   addSseClient(runId, res);
 
+  // Send heartbeat every 15s to keep connection alive through proxies
+  const heartbeat = setInterval(() => {
+    try { res.write(":heartbeat\n\n"); } catch { clearInterval(heartbeat); }
+  }, 15000);
+
   // Cleanup on disconnect
   req.on("close", () => {
+    clearInterval(heartbeat);
     removeSseClient(runId, res);
   });
 });

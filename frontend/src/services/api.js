@@ -74,7 +74,19 @@ export function connectSSE(runId, handlers = {}) {
   });
 
   source.onerror = () => {
-    // SSE connection error — might reconnect automatically
+    // SSE connection error — try polling results as fallback
+    setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/results/${runId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.results && data.status !== "running") {
+            handlers.onComplete?.(data.results);
+            source.close();
+          }
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
   };
 
   return source;
