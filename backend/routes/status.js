@@ -65,6 +65,16 @@ router.get("/results/:runId", (req, res) => {
   }
 
   if (!run.results) {
+    // If run errored, return the error details from progress events
+    if (run.status === "error") {
+      const errorEvent = run.progress.find((e) => e.type === "error");
+      return res.status(500).json({
+        error: true,
+        message: errorEvent?.data?.message || "Pipeline failed with unknown error",
+        status: "error",
+        runId: run.id,
+      });
+    }
     return res.status(202).json({
       error: false,
       message: "Run is still in progress",
