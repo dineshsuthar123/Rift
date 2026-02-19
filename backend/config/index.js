@@ -12,14 +12,14 @@ const config = {
   isProd,
 
   // GitHub
-  githubToken: process.env.GITHUB_TOKEN || "",
+  githubToken: (process.env.GITHUB_TOKEN || "").trim(),
 
   // AI Keys (passed through to Python agent)
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
-  googleApiKey: process.env.GOOGLE_API_KEY || "",
-  openaiApiKey: process.env.OPENAI_API_KEY || "",
-  groqApiKey: process.env.GROQ_API_KEY || "",
-  llmProvider: process.env.LLM_PROVIDER || "groq",
+  anthropicApiKey: (process.env.ANTHROPIC_API_KEY || "").trim(),
+  googleApiKey: (process.env.GOOGLE_API_KEY || "").trim(),
+  openaiApiKey: (process.env.OPENAI_API_KEY || "").trim(),
+  groqApiKey: (process.env.GROQ_API_KEY || "").trim(),
+  llmProvider: (process.env.LLM_PROVIDER || "groq").trim(),
 
   // CORS — comma-separated allowed origins in production
   corsOrigins: process.env.CORS_ORIGINS || "*",
