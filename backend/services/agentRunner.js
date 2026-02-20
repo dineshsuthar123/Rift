@@ -149,15 +149,18 @@ async function runAgent({
       } catch (readErr) {
         // If agent exited non-zero and no results, build a failure result
         if (code !== 0) {
-          // Strip decorative banner lines to show actual error
+          // Strip decorative banner lines and numbered error lists
           const usefulStderr = stderrBuf
             .split("\n")
-            .filter((l) => !l.startsWith("###") && !l.startsWith("===") && l.trim())
-            .join("\n")
-            .slice(0, 2000);
+            .filter((l) => !l.startsWith("###") && !l.startsWith("===") && !l.match(/^\s+\d+\.\s+\[/) && l.trim())
+            .join("\n");
+          // Show first 500 + last 1500 chars for both context and actual error
+          const head = usefulStderr.slice(0, 500);
+          const tail = usefulStderr.slice(-1500);
+          const combined = head === tail ? head : `${head}\n...[truncated]...\n${tail}`;
           reject(
             new Error(
-              `Agent exited with code ${code}. Stderr: ${usefulStderr}`
+              `Agent exited with code ${code}. Stderr: ${combined}`
             )
           );
         } else {
