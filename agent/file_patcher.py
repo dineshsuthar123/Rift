@@ -38,25 +38,102 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
     original_code = fix.get("original_code", "")
     fixed_code = fix.get("fixed_code", "")
 
-    if line_number < 1 or line_number > len(lines):
-        print(f"[PATCHER] Line {line_number} out of range for {fix['file_path']} (has {len(lines)} lines)", file=sys.stderr)
+    # Clamp line_number into valid range instead of rejecting outright
+    if line_number < 1:
+        line_number = 1
+    if line_number > len(lines):
+        print(f"[PATCHER] Line {line_number} out of range for {fix['file_path']} (has {len(lines)} lines), clamping to {len(lines)}", file=sys.stderr)
+        line_number = len(lines)
+
+    def _replace_line(i, code):
+        """Replace line i with code, preserving indentation."""
+        if code == "" or code is None:
+            lines.pop(i)
+        else:
+            cur_indent = len(lines[i]) - len(lines[i].lstrip())
+            indent = lines[i][:cur_indent]
+            new_lines = code.strip().split("\n")
+            lines[i] = "\n".join(indent + l for l in new_lines) + "\n"
+
+    def _fuzzy_match(haystack, needle):
+        """Check if needle is in haystack, with fallback to quote-stripped match."""
+        h = haystack.strip()
+        n = needle.strip()
+        if not n:
+            return False
+        if n in h:
+            return True
+        # Fallback: strip all quotes (LLM sometimes drops inner quotes in JSON)
+        h_nq = h.replace('"', '').replace("'", '')
+        n_nq = n.replace('"', '').replace("'", '')
+        if n_nq and n_nq in h_nq:
+            return True
         return False
+
+    def _smart_replace(actual_line, orig, fixed):
+        """
+        When the LLM's original_code doesn't exactly match the actual file line
+        (e.g., quotes stripped during JSON encoding), compute the diff between
+        orig→fixed and apply that delta to the actual line instead.
+        """
+        ao = orig.strip()
+        af = fixed.strip()
+        al = actual_line.rstrip('\n').rstrip('\r')
+
+        # If exact substring exists, do normal replacement
+        if ao and ao in al:
+            return al.replace(ao, af, 1)
+
+        # Detect suffix addition:  orig="print(abc"  fixed="print(abc)"  → add ")"
+        if af.startswith(ao) and len(af) > len(ao):
+            suffix = af[len(ao):]
+            return al + suffix
+
+        # Detect prefix addition
+        if af.endswith(ao) and len(af) > len(ao):
+            prefix = af[:len(af) - len(ao)]
+            return prefix + al
+
+        # Detect replacement within: find longest common prefix/suffix
+        # between orig and fixed, apply the middle change to actual
+        cp = 0
+        while cp < len(ao) and cp < len(af) and ao[cp] == af[cp]:
+            cp += 1
+        cs = 0
+        while cs < (len(ao) - cp) and cs < (len(af) - cp) and ao[-(cs+1)] == af[-(cs+1)]:
+            cs += 1
+        if cp > 0 or cs > 0:
+            old_mid = ao[cp:len(ao)-cs] if cs else ao[cp:]
+            new_mid = af[cp:len(af)-cs] if cs else af[cp:]
+            # Try to apply this middle replacement to actual line (quote-aware)
+            al_nq = al.replace('"', '').replace("'", '')
+            if old_mid and old_mid in al_nq:
+                # Find position in quote-stripped version and map back
+                pass  # too complex, fall through
+
+        # Last resort: just return fixed_code directly
+        return af
 
     try:
         idx = line_number - 1  # Convert to 0-indexed
 
-        # Strategy 1: Exact line replacement
-        if original_code and original_code.strip() in lines[idx]:
-            if fixed_code == "" or fixed_code is None:
-                # Delete the line
-                lines.pop(idx)
+        def _apply_fix_at(i):
+            """Apply fix at line i using smart replacement when possible."""
+            actual = lines[i]
+            if original_code and original_code.strip() in actual:
+                # Exact match — simple replacement
+                _replace_line(i, fixed_code)
+            elif original_code and _fuzzy_match(actual, original_code):
+                # Fuzzy match — compute smart replacement from actual line
+                result = _smart_replace(actual, original_code, fixed_code)
+                _replace_line(i, result)
             else:
-                # Replace preserving indentation
-                current_indent = len(lines[idx]) - len(lines[idx].lstrip())
-                indent = lines[idx][:current_indent]
-                new_lines = fixed_code.strip().split("\n")
-                replacement = "\n".join(indent + l for l in new_lines) + "\n"
-                lines[idx] = replacement
+                # No match on original — trust fixed_code directly
+                _replace_line(i, fixed_code)
+
+        # Strategy 1: Try the target line
+        if original_code and (_fuzzy_match(lines[idx], original_code) or original_code.strip() in lines[idx]):
+            _apply_fix_at(idx)
         elif original_code:
             # Strategy 2: Search in a window around the line
             window = 5
@@ -64,37 +141,23 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
             end = min(len(lines), idx + window + 1)
             found = False
             for i in range(start, end):
-                if original_code.strip() in lines[i]:
-                    if fixed_code == "" or fixed_code is None:
-                        lines.pop(i)
-                    else:
-                        current_indent = len(lines[i]) - len(lines[i].lstrip())
-                        indent = lines[i][:current_indent]
-                        new_lines = fixed_code.strip().split("\n")
-                        replacement = "\n".join(indent + l for l in new_lines) + "\n"
-                        lines[i] = replacement
+                if _fuzzy_match(lines[i], original_code):
+                    _apply_fix_at(i)
                     found = True
                     break
             if not found:
-                # Strategy 3: Direct line replacement
-                if fixed_code == "" or fixed_code is None:
-                    lines.pop(idx)
-                else:
-                    current_indent = len(lines[idx]) - len(lines[idx].lstrip())
-                    indent = lines[idx][:current_indent]
-                    new_lines = fixed_code.strip().split("\n")
-                    replacement = "\n".join(indent + l for l in new_lines) + "\n"
-                    lines[idx] = replacement
+                # Strategy 3: Search the ENTIRE file
+                for i in range(len(lines)):
+                    if _fuzzy_match(lines[i], original_code):
+                        _apply_fix_at(i)
+                        found = True
+                        break
+            if not found:
+                # Strategy 4: Direct line replacement (trust fixed_code)
+                _apply_fix_at(idx)
         else:
             # No original_code provided — just replace the line directly
-            if fixed_code == "" or fixed_code is None:
-                lines.pop(idx)
-            else:
-                current_indent = len(lines[idx]) - len(lines[idx].lstrip())
-                indent = lines[idx][:current_indent]
-                new_lines = fixed_code.strip().split("\n")
-                replacement = "\n".join(indent + l for l in new_lines) + "\n"
-                lines[idx] = replacement
+            _replace_line(idx, fixed_code)
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
