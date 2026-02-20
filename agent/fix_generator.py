@@ -373,7 +373,57 @@ def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, 
         if validated:
             print(f"[FIX_GEN] Rule-based fallback generated {len(validated)} fix(es)", file=sys.stderr)
 
+    # Last resort: run ruff --fix for auto-fixable issues
+    if not validated and repo_path:
+        validated = _ruff_autofix_fallback(errors, repo_path)
+
     return validated
+
+
+def _ruff_autofix_fallback(errors: List['ParsedError'], repo_path: str) -> List[Dict[str, Any]]:
+    """
+    Last resort: use ruff's built-in auto-fixer for fixable errors.
+    Returns fix descriptions for tracking purposes.
+    """
+    import subprocess
+    import sys
+
+    linting_errors = [e for e in errors if e.get("raw_message", "").startswith(("F", "E", "W", "I"))]
+    if not linting_errors:
+        return []
+
+    try:
+        print("[FIX_GEN] Attempting ruff --fix auto-fix as last resort...", file=sys.stderr)
+        result = subprocess.run(
+            ["ruff", "check", "--fix", "--unsafe-fixes", "."],
+            capture_output=True, text=True,
+            cwd=repo_path, timeout=30
+        )
+        # Check if ruff actually fixed anything
+        if "Fixed" in (result.stderr or ""):
+            import re
+            m = re.search(r'Fixed (\d+)', result.stderr)
+            fixed_count = int(m.group(1)) if m else 0
+            print(f"[FIX_GEN] ruff --fix auto-fixed {fixed_count} issue(s)", file=sys.stderr)
+
+            # Build fix records for tracking
+            fixes = []
+            for err in linting_errors[:fixed_count]:
+                fixes.append({
+                    "file_path": err.get("file_path", ""),
+                    "line_number": err.get("line_number", 0),
+                    "bug_type": err.get("bug_type", "LINTING"),
+                    "fix_description": f"auto-fixed by ruff: {err.get('raw_message', '')[:80]}",
+                    "original_code": "",
+                    "fixed_code": "[auto-fixed by ruff]",
+                    "commit_message": f"{COMMIT_PREFIX} Auto-fix {err.get('raw_message', '')[:50]} in {err.get('file_path', '')}",
+                    "_already_applied": True,  # Flag so patcher skips re-applying
+                })
+            return fixes
+    except Exception as e:
+        print(f"[FIX_GEN] ruff --fix failed: {e}", file=sys.stderr)
+
+    return []
 
 
 def format_fix_for_results(fix: Dict[str, Any]) -> str:
