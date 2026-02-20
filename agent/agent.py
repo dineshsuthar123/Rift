@@ -482,6 +482,14 @@ def run_agent(
     print(f"# Max Iterations: {max_iterations}", file=sys.stderr)
     print(f"{'#'*60}\n", file=sys.stderr)
 
+    # Diagnostic: log LLM configuration
+    from config import LLM_PROVIDER, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
+    print(f"[CONFIG] LLM_PROVIDER={LLM_PROVIDER}", file=sys.stderr)
+    print(f"[CONFIG] GROQ_API_KEY={'SET (' + GROQ_API_KEY[:8] + '...)' if GROQ_API_KEY else 'EMPTY'}", file=sys.stderr)
+    print(f"[CONFIG] OPENAI_API_KEY={'SET' if OPENAI_API_KEY else 'EMPTY'}", file=sys.stderr)
+    print(f"[CONFIG] ANTHROPIC_API_KEY={'SET' if ANTHROPIC_API_KEY else 'EMPTY'}", file=sys.stderr)
+    print(f"[CONFIG] GOOGLE_API_KEY={'SET' if GOOGLE_API_KEY else 'EMPTY'}", file=sys.stderr)
+
     # Build and run the graph
     app = build_graph()
 
