@@ -215,9 +215,11 @@ def parse_llm_response(raw_response: str) -> List[Dict[str, Any]]:
 
     # Strip markdown code fences if present
     cleaned = raw_response.strip()
-    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```$', '', cleaned)
+    cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+    cleaned = re.sub(r'\n?\s*```\s*$', '', cleaned)
+    cleaned = cleaned.strip()
 
+    # Try direct parse
     try:
         fixes = json.loads(cleaned)
         if isinstance(fixes, list):
@@ -225,13 +227,23 @@ def parse_llm_response(raw_response: str) -> List[Dict[str, Any]]:
         elif isinstance(fixes, dict):
             return [fixes]
     except json.JSONDecodeError:
-        # Try to find JSON array in the response
-        match = re.search(r'\[.*\]', cleaned, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+        pass
+
+    # Try to find JSON array in the response
+    match = re.search(r'\[\s*\{.*?\}\s*\]', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # Try to find a single JSON object
+    match = re.search(r'\{[^{}]*"file_path"[^{}]*\}', cleaned, re.DOTALL)
+    if match:
+        try:
+            return [json.loads(match.group())]
+        except json.JSONDecodeError:
+            pass
 
     return []
 
@@ -295,6 +307,32 @@ def _generate_import_fix(err: ParsedError) -> Optional[Dict[str, Any]]:
             "commit_message": f"{COMMIT_PREFIX} Fix blank line spacing in {file_path}",
         }
 
+    # E712 — comparison to True/False
+    if "E712" in msg or "equality comparison" in msg.lower():
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "LINTING",
+            "fix_description": "use identity comparison instead of equality (is/is not)",
+            "original_code": "",
+            "fixed_code": "",
+            "commit_message": f"{COMMIT_PREFIX} Fix equality comparison style in {file_path}",
+        }
+
+    # F841 — local variable assigned but never used
+    m = re.search(r"F841.*`?([\w]+)`?\s+is assigned", msg)
+    if m:
+        var_name = m.group(1)
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "LINTING",
+            "fix_description": f"remove unused variable {var_name} or prefix with underscore",
+            "original_code": "",
+            "fixed_code": "",
+            "commit_message": f"{COMMIT_PREFIX} Fix unused variable {var_name} in {file_path}",
+        }
+
     return None
 
 
@@ -309,6 +347,10 @@ def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, 
 
     user_prompt = _build_user_prompt(errors, repo_path)
     raw_response = call_llm(SYSTEM_PROMPT, user_prompt)
+
+    import sys
+    print(f"[FIX_GEN] LLM raw response ({len(raw_response)} chars): {raw_response[:500]}", file=sys.stderr)
+
     fixes = parse_llm_response(raw_response)
 
     # Validate and normalize
@@ -317,11 +359,13 @@ def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, 
         fix = normalize_fix(fix)
         if validate_fix(fix):
             validated.append(fix)
+        else:
+            print(f"[FIX_GEN] Fix failed validation: {fix}", file=sys.stderr)
 
     # Fallback: if LLM returned 0 fixes, try rule-based fixes
     if not validated:
         import sys
-        print(f"[FIX_GEN] LLM returned 0 fixes, trying rule-based fallback for {len(errors)} errors", file=sys.stderr)
+        print(f"[FIX_GEN] LLM returned 0 valid fixes, trying rule-based fallback for {len(errors)} errors", file=sys.stderr)
         for err in errors:
             rule_fix = _generate_import_fix(err)
             if rule_fix:
