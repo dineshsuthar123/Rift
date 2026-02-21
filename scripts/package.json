@@ -1,0 +1,17 @@
+{
+  "name": "rift-cleanup-cron",
+  "version": "2.0.0",
+  "description": "RIFT v2 — Koyeb cleanup cron: prune stale Supabase rows and temp workspaces",
+  "main": "cleanup_cron.js",
+  "scripts": {
+    "start": "node cleanup_cron.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.46.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
