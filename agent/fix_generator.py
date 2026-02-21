@@ -684,7 +684,7 @@ def _generate_rule_fixes(err: ParsedError,
                 }]
 
     # ─── E302/E303: Expected blank lines ──────────────────────────
-    m = re.search(r"E30[23].*expected (\d+) blank lines?.*found (\d+)", msg)
+    m = re.search(r"E30[23].*expected (\d+) blank lines?.*found (\d+)", msg, re.IGNORECASE)
     if m:
         expected = int(m.group(1))
         found = int(m.group(2))
@@ -727,7 +727,7 @@ def _generate_rule_fixes(err: ParsedError,
             }]
 
     # ─── F821: Undefined name ─────────────────────────────────────
-    m = re.search(r"undefined name `?(\w+)`?", msg)
+    m = re.search(r"undefined name `?(\w+)`?", msg, re.IGNORECASE)
     if m:
         undef = m.group(1)
         suggestion = _find_similar_name(
@@ -752,7 +752,7 @@ def _generate_rule_fixes(err: ParsedError,
                 }]
 
     # ─── F811: Redefined unused name ──────────────────────────────
-    m = re.search(r"F811.*redefinition of unused `?(\w+)`?", msg)
+    m = re.search(r"F811.*redefinition of unused `?(\w+)`?", msg, re.IGNORECASE)
     if m:
         return [{
             "file_path": file_path, "line_number": line_number,
@@ -778,7 +778,7 @@ def _fix_e741_scope_aware(err: ParsedError,
     file_path = err.get("file_path", "")
     line_number = err.get("line_number", 0)
 
-    match = re.search(r"ambiguous variable name.?\s*`?(\w+)`?", msg)
+    match = re.search(r"ambiguous variable name.?\s*`?(\w+)`?", msg, re.IGNORECASE)
     if not match:
         return []
 
