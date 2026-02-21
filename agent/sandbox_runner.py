@@ -76,6 +76,30 @@ def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
     return errors_output
 
 
+def _auto_fix_with_ruff(repo_path: str) -> int:
+    """
+    Pre-pass: run `ruff check --fix --unsafe-fixes` to auto-resolve
+    trivially fixable issues (F401, F541, E302, E711/E712, …) BEFORE
+    the read-only analysis.  Returns the number of issues auto-fixed.
+    """
+    try:
+        result = subprocess.run(
+            ["ruff", "check", "--fix", "--unsafe-fixes", "."],
+            capture_output=True, text=True,
+            cwd=repo_path, timeout=30,
+        )
+        combined = (result.stdout or "") + (result.stderr or "")
+        import re as _re
+        m = _re.search(r"Fixed (\d+)", combined)
+        count = int(m.group(1)) if m else 0
+        if count:
+            print(f"[LOCAL] ruff --fix auto-fixed {count} issue(s)", file=sys.stderr)
+        return count
+    except Exception as e:
+        print(f"[LOCAL] ruff --fix skipped: {e}", file=sys.stderr)
+        return 0
+
+
 def run_local_analysis(repo_path: str) -> str:
     """
     Fallback: run ruff and pytest locally if Docker is not available.
@@ -84,7 +108,10 @@ def run_local_analysis(repo_path: str) -> str:
     errors = []
     errors_output = os.path.join(repo_path, "errors.json")
 
-    # ─── Run ruff ─────────────────────────────────────────────────
+    # ─── Auto-fix trivial issues FIRST ────────────────────────────
+    _auto_fix_with_ruff(repo_path)
+
+    # ─── Run ruff (read-only) for remaining errors ────────────────
     try:
         result = subprocess.run(
             ["ruff", "check", "--output-format=json", "."],

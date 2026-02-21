@@ -272,8 +272,8 @@ def normalize_fix(fix: Dict[str, Any]) -> Dict[str, Any]:
     return fix
 
 
-def _generate_import_fix(err: ParsedError) -> Optional[Dict[str, Any]]:
-    """Rule-based fallback: generate a fix for common import errors without LLM."""
+def _generate_rule_fix(err: ParsedError, repo_path: str = "") -> Optional[Dict[str, Any]]:
+    """Rule-based fallback: generate a fix for common ruff errors without LLM."""
     msg = err.get("raw_message", "")
     file_path = err.get("file_path", "")
     line_number = err.get("line_number", 0)
@@ -287,7 +287,7 @@ def _generate_import_fix(err: ParsedError) -> Optional[Dict[str, Any]]:
             "line_number": line_number,
             "bug_type": "IMPORT",
             "fix_description": f"remove unused import {unused}",
-            "original_code": "",   # will be filled by apply step
+            "original_code": "",
             "fixed_code": "",
             "commit_message": f"{COMMIT_PREFIX} Remove unused import {unused} in {file_path}",
         }
@@ -332,6 +332,80 @@ def _generate_import_fix(err: ParsedError) -> Optional[Dict[str, Any]]:
             "commit_message": f"{COMMIT_PREFIX} Fix unused variable {var_name} in {file_path}",
         }
 
+    # E741 — ambiguous variable name
+    m = re.search(r"E741.*ambiguous variable name.?\s*`?(\w+)`?", msg)
+    if m:
+        var = m.group(1)
+        # Read the actual line to generate a concrete rename
+        renamed = var + "_var" if len(var) == 1 else var + "_"
+        orig_line = _read_source_line(repo_path, file_path, line_number)
+        fixed_line = orig_line.replace(var, renamed) if orig_line else ""
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "LINTING",
+            "fix_description": f"rename ambiguous variable '{var}' to '{renamed}'",
+            "original_code": orig_line.strip() if orig_line else "",
+            "fixed_code": fixed_line.strip() if fixed_line else "",
+            "commit_message": f"{COMMIT_PREFIX} Rename ambiguous variable {var} in {file_path}",
+        }
+
+    # F541 — f-string without placeholder
+    if "F541" in msg or "f-string without any placeholders" in msg.lower():
+        orig_line = _read_source_line(repo_path, file_path, line_number)
+        if orig_line:
+            # Remove the f prefix: f"..." → "..."
+            fixed_line = re.sub(r"\bf(['\"])", r"\1", orig_line)
+            return {
+                "file_path": file_path,
+                "line_number": line_number,
+                "bug_type": "LINTING",
+                "fix_description": "remove f prefix from string without placeholders",
+                "original_code": orig_line.strip(),
+                "fixed_code": fixed_line.strip(),
+                "commit_message": f"{COMMIT_PREFIX} Remove unnecessary f-string in {file_path}",
+            }
+
+    # E111/E117 — indentation issues
+    if re.search(r"E11[1-7]", msg):
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "INDENTATION",
+            "fix_description": "fix indentation to match expected level",
+            "original_code": "",
+            "fixed_code": "",
+            "commit_message": f"{COMMIT_PREFIX} Fix indentation in {file_path}",
+        }
+
+    # W291/W292/W293 — trailing whitespace / no newline at EOF
+    if re.search(r"W29[1-3]", msg):
+        orig_line = _read_source_line(repo_path, file_path, line_number)
+        return {
+            "file_path": file_path,
+            "line_number": line_number,
+            "bug_type": "LINTING",
+            "fix_description": "remove trailing whitespace",
+            "original_code": orig_line.strip() if orig_line else "",
+            "fixed_code": orig_line.rstrip() if orig_line else "",
+            "commit_message": f"{COMMIT_PREFIX} Remove trailing whitespace in {file_path}",
+        }
+
+    return None
+
+
+def _read_source_line(repo_path: str, file_path: str, line_number: int) -> Optional[str]:
+    """Read a single source line from a file."""
+    if not repo_path or not file_path:
+        return None
+    full_path = os.path.join(repo_path, file_path)
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f, 1):
+                if i == line_number:
+                    return line.rstrip("\n")
+    except Exception:
+        pass
     return None
 
 
@@ -361,16 +435,17 @@ def generate_fixes(errors: List[ParsedError], repo_path: str) -> List[Dict[str, 
         else:
             print(f"[FIX_GEN] Fix failed validation: {fix}", file=sys.stderr)
 
-    # Fallback: if LLM returned 0 fixes, try rule-based fixes
-    if not validated:
+    # Supplement: try rule-based fixes for errors the LLM didn't cover
+    covered_keys = {(f.get("file_path"), f.get("line_number")) for f in validated}
+    uncovered = [e for e in errors if (e.get("file_path"), e.get("line_number")) not in covered_keys]
+    if uncovered:
         import sys
-        print(f"[FIX_GEN] LLM returned 0 valid fixes, trying rule-based fallback for {len(errors)} errors", file=sys.stderr)
-        for err in errors:
-            rule_fix = _generate_import_fix(err)
+        print(f"[FIX_GEN] {len(uncovered)} error(s) not covered by LLM, trying rule-based fixes", file=sys.stderr)
+        for err in uncovered:
+            rule_fix = _generate_rule_fix(err, repo_path)
             if rule_fix:
                 validated.append(rule_fix)
-        if validated:
-            print(f"[FIX_GEN] Rule-based fallback generated {len(validated)} fix(es)", file=sys.stderr)
+        print(f"[FIX_GEN] Rule-based fallback generated {len(validated) - len(covered_keys)} additional fix(es)", file=sys.stderr)
 
     # Last resort: run ruff --fix for auto-fixable issues
     if not validated and repo_path:

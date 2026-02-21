@@ -46,14 +46,26 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
         line_number = len(lines)
 
     def _replace_line(i, code):
-        """Replace line i with code, preserving indentation."""
+        """Replace line i with code.
+
+        If the fixed code already carries its own leading whitespace
+        (e.g. the LLM intentionally changed indentation), use it as-is.
+        Otherwise, preserve the original line's indentation.
+        """
         if code == "" or code is None:
             lines.pop(i)
         else:
-            cur_indent = len(lines[i]) - len(lines[i].lstrip())
-            indent = lines[i][:cur_indent]
-            new_lines = code.strip().split("\n")
-            lines[i] = "\n".join(indent + line for line in new_lines) + "\n"
+            has_own_indent = (code != code.lstrip())
+            if has_own_indent:
+                # LLM provided explicit indentation — respect it
+                new_lines = code.rstrip().split("\n")
+                lines[i] = "\n".join(new_lines) + "\n"
+            else:
+                # No leading whitespace — keep the original indent
+                cur_indent = len(lines[i]) - len(lines[i].lstrip())
+                indent = lines[i][:cur_indent]
+                new_lines = code.strip().split("\n")
+                lines[i] = "\n".join(indent + line for line in new_lines) + "\n"
 
     def _fuzzy_match(haystack, needle):
         """Check if needle is in haystack, with fallback to quote-stripped match."""
