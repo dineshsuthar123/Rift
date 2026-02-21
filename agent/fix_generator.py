@@ -144,9 +144,18 @@ def _read_file_lines(repo_path: str, file_path: str) -> List[str]:
 # User Prompt Builder — Full File Context + Iteration History
 # ═══════════════════════════════════════════════════════════════════════
 
+# Maximum prompt length in chars (~4 chars/token, stay under 6K tokens for Groq)
+_MAX_PROMPT_CHARS = 24_000
+
+
 def _build_user_prompt(errors: List[ParsedError], repo_path: str,
-                       iteration_context: Optional[Dict[str, Any]] = None) -> str:
-    """Build the user prompt with full file context and iteration history."""
+                       iteration_context: Optional[Dict[str, Any]] = None,
+                       compact: bool = False) -> str:
+    """Build the user prompt with file context and iteration history.
+
+    When *compact* is True (or the prompt exceeds _MAX_PROMPT_CHARS),
+    only include context windows instead of full files.
+    """
     parts: list[str] = [
         "Fix ALL of the following errors. Output ONLY a JSON array of fixes.\n",
     ]
@@ -161,16 +170,24 @@ def _build_user_prompt(errors: List[ParsedError], repo_path: str,
         parts.append(f"FILE: {file_path}")
         parts.append(f"{'=' * 60}")
 
-        # Prefer full file; fall back to context windows
-        full = _read_full_file(repo_path, file_path)
-        if full:
-            parts.append(f"\nFull file content ({file_path}):")
-            parts.append(full)
+        if not compact:
+            # Prefer full file; fall back to context windows
+            full = _read_full_file(repo_path, file_path)
+            if full:
+                parts.append(f"\nFull file content ({file_path}):")
+                parts.append(full)
+            else:
+                for err in file_errors:
+                    parts.append(f"\nContext around line {err['line_number']}:")
+                    parts.append(
+                        _read_file_context(repo_path, file_path, err["line_number"])
+                    )
         else:
+            # Compact mode: only context windows
             for err in file_errors:
                 parts.append(f"\nContext around line {err['line_number']}:")
                 parts.append(
-                    _read_file_context(repo_path, file_path, err["line_number"])
+                    _read_file_context(repo_path, file_path, err["line_number"], context_lines=10)
                 )
 
         parts.append(f"\nErrors in {file_path}:")
@@ -182,34 +199,35 @@ def _build_user_prompt(errors: List[ParsedError], repo_path: str,
             )
 
     # ── For test failures, include the implementation files too ───
-    test_errors = [
-        e for e in errors
-        if e.get("bug_type") == "LOGIC"
-        and "test" in e.get("file_path", "").lower()
-    ]
-    if test_errors:
-        try:
-            source_files = {
-                f for f in os.listdir(repo_path)
-                if f.endswith(".py")
-                and not f.startswith("test")
-                and f != "__init__.py"
-                and f not in by_file
-            }
-        except OSError:
-            source_files = set()
-        for src_file in source_files:
-            full = _read_full_file(repo_path, src_file)
-            if full:
-                parts.append(f"\n{'=' * 60}")
-                parts.append(f"SOURCE FILE (referenced by tests): {src_file}")
-                parts.append(f"{'=' * 60}")
-                parts.append(full)
+    if not compact:
+        test_errors = [
+            e for e in errors
+            if e.get("bug_type") == "LOGIC"
+            and "test" in e.get("file_path", "").lower()
+        ]
+        if test_errors:
+            try:
+                source_files = {
+                    f for f in os.listdir(repo_path)
+                    if f.endswith(".py")
+                    and not f.startswith("test")
+                    and f != "__init__.py"
+                    and f not in by_file
+                }
+            except OSError:
+                source_files = set()
+            for src_file in source_files:
+                full = _read_full_file(repo_path, src_file)
+                if full:
+                    parts.append(f"\n{'=' * 60}")
+                    parts.append(f"SOURCE FILE (referenced by tests): {src_file}")
+                    parts.append(f"{'=' * 60}")
+                    parts.append(full)
 
     # ── Iteration context (multi-iteration awareness) ─────────────
     if iteration_context and iteration_context.get("current_iteration", 1) > 1:
         parts.append(f"\n{'=' * 60}")
-        parts.append("ITERATION CONTEXT — Use this to avoid repeating mistakes")
+        parts.append("ITERATION CONTEXT")
         parts.append(f"{'=' * 60}")
         parts.append(
             f"Current iteration: {iteration_context['current_iteration']}"
@@ -233,7 +251,17 @@ def _build_user_prompt(errors: List[ParsedError], repo_path: str,
         if history:
             parts.append(f"\nError count per iteration: {history}")
 
-    return "\n".join(parts)
+    prompt = "\n".join(parts)
+
+    # If prompt is too long and we haven't already compacted, retry compact
+    if len(prompt) > _MAX_PROMPT_CHARS and not compact:
+        print(
+            f"[FIX_GEN] Prompt too long ({len(prompt)} chars), switching to compact mode",
+            file=sys.stderr,
+        )
+        return _build_user_prompt(errors, repo_path, iteration_context, compact=True)
+
+    return prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -291,7 +319,7 @@ def call_groq(system_prompt: str, user_prompt: str) -> str:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
-            max_tokens=4096,
+            max_tokens=8192,
         )
         return response.choices[0].message.content or ""
     except Exception as exc:
@@ -841,6 +869,16 @@ def generate_fixes(
 
     # Build prompt with full file context and iteration history
     user_prompt = _build_user_prompt(errors, repo_path, iteration_context)
+    print(
+        f"[FIX_GEN] Prompt length: {len(user_prompt)} chars for {len(errors)} error(s)",
+        file=sys.stderr,
+    )
+    for err in errors:
+        print(
+            f"[FIX_GEN]   Error: {err.get('file_path')}:{err.get('line_number')} "
+            f"{err.get('raw_message', '')[:100]}",
+            file=sys.stderr,
+        )
     raw_response = call_llm(SYSTEM_PROMPT, user_prompt)
 
     print(
@@ -850,6 +888,23 @@ def generate_fixes(
     )
 
     fixes = parse_llm_response(raw_response)
+
+    # If LLM returned 0 fixes, retry with compact prompt
+    if not fixes and len(user_prompt) > 8000:
+        print(
+            "[FIX_GEN] LLM returned 0 fixes, retrying with compact prompt",
+            file=sys.stderr,
+        )
+        compact_prompt = _build_user_prompt(
+            errors, repo_path, iteration_context, compact=True,
+        )
+        raw_response = call_llm(SYSTEM_PROMPT, compact_prompt)
+        print(
+            f"[FIX_GEN] Retry response ({len(raw_response)} chars): "
+            f"{raw_response[:300]}",
+            file=sys.stderr,
+        )
+        fixes = parse_llm_response(raw_response)
 
     # Validate and normalize LLM fixes
     validated: list[Dict[str, Any]] = []

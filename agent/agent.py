@@ -101,12 +101,23 @@ def analyze_logs(state: AgentState) -> dict:
     print(f"[ANALYZE] Found {len(errors)} error(s)", file=sys.stderr)
     if errors:
         print(format_errors_summary(errors), file=sys.stderr)
+        # Log individual errors for debugging
+        for err in errors:
+            print(
+                f"[ANALYZE]   -> {err['file_path']}:{err['line_number']} "
+                f"[{err['bug_type']}] {err['raw_message'][:120]}",
+                file=sys.stderr,
+            )
 
     emit_progress("progress", {
         "phase": "analyzed",
         "message": f"Found {len(errors)} error(s) in iteration {iteration}",
         "errors_found": len(errors),
         "iteration": iteration,
+        "error_details": [
+            f"{e['file_path']}:{e['line_number']} {e['raw_message'][:80]}"
+            for e in errors[:10]
+        ],
     })
 
     # Emit an iteration event for the timeline
