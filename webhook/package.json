@@ -1,0 +1,26 @@
+{
+  "name": "rift-webhook-receiver",
+  "version": "2.0.0",
+  "description": "RIFT v2 — Koyeb GitHub webhook receiver that triggers GitHub Actions review workflows",
+  "main": "webhook.js",
+  "scripts": {
+    "start": "node webhook.js",
+    "dev": "nodemon webhook.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "@octokit/plugin-throttling": "^9.3.2",
+    "@octokit/rest": "^21.0.2",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
