@@ -159,29 +159,51 @@ def run_local_analysis(repo_path: str) -> str:
 
 
 def _parse_pytest_output(output: str, repo_path: str) -> list:
-    """Parse pytest text output into structured error dicts."""
-    import re
-    errors = []
+    """Parse pytest text output into structured error dicts.
 
-    # Match FAILED lines like: FAILED tests/test_main.py::test_func - AssertionError: ...
+    Captures:
+    - Short-traceback lines (file.py:22: AssertionError)
+    - FAILED summary lines (FAILED tests/test.py::test_func - ...)
+    - Assertion values (E  assert 3 == 4, E  AssertionError: ...)
+    - ERROR lines (collection/import errors)
+    """
+    import re
+    errors: list[dict] = []
+
+    # ── Patterns ──────────────────────────────────────────────────
     failed_pattern = re.compile(
         r'FAILED\s+([\w/\\.]+)::(\w+)(?:\s*-\s*(.+))?'
     )
-
-    # Match ERROR lines
-    re.compile(
+    error_pattern = re.compile(
         r'ERROR\s+([\w/\\.]+)(?:::(\w+))?\s*-\s*(.+)'
     )
-
-    # Match short traceback lines like: file.py:22: AssertionError
     tb_pattern = re.compile(
-        r'([\w/\\.]+):(\d+):\s*((?:Assert|Type|Name|Import|Syntax|Indentation|Attribute|Value|Key|Index)\w*(?:Error|Warning)[:\s]*.*)' 
+        r'([\w/\\.]+):(\d+):\s*((?:Assert|Type|Name|Import|Syntax|Indentation'
+        r'|Attribute|Value|Key|Index|Zero|Runtime|StopIteration|Recursion'
+        r'|Overflow|FileNotFound|Permission|OS|IO|EOF|Unicode|Lookup'
+        r'|Arithmetic|FloatingPoint)\w*(?:Error|Warning)[:\s].*)'
+    )
+    # Capture E-lines from pytest verbose output: "E    assert 3 == 4"
+    assert_value_pattern = re.compile(
+        r'^\s*E\s+(assert .+|AssertionError.+|Expected .+|Got .+|'
+        r'where .+|[\d.]+ [!=<>]+ [\d.]+)',
+        re.MULTILINE,
     )
 
+    # ── Collect assertion detail lines ────────────────────────────
+    assertion_details = []
+    for m in assert_value_pattern.finditer(output):
+        assertion_details.append(m.group(1).strip())
+    detail_str = " | ".join(assertion_details[:5]) if assertion_details else ""
+
+    # ── Parse traceback-style errors ──────────────────────────────
     for match in tb_pattern.finditer(output):
         file_path = match.group(1).replace("\\", "/")
         line = int(match.group(2))
         message = match.group(3).strip()
+        # Append assertion values for richer context
+        if detail_str and "assert" not in message.lower():
+            message = f"{message} ({detail_str})"
 
         errors.append({
             "type": "LOGIC",
@@ -189,21 +211,46 @@ def _parse_pytest_output(output: str, repo_path: str) -> list:
             "line": line,
             "message": message,
             "source": "pytest",
-            "code": ""
+            "code": "",
         })
 
-    # If no traceback matches, try FAILED lines
+    # ── Parse ERROR lines (import/collection errors) ──────────────
+    for match in error_pattern.finditer(output):
+        file_path = match.group(1).replace("\\", "/")
+        message = match.group(3) or f"Error in {match.group(2) or file_path}"
+        errors.append({
+            "type": "LOGIC",
+            "file": file_path,
+            "line": 1,
+            "message": message,
+            "source": "pytest",
+            "code": "",
+        })
+
+    # ── Fallback: FAILED summary lines ────────────────────────────
     if not errors:
         for match in failed_pattern.finditer(output):
             file_path = match.group(1).replace("\\", "/")
-            message = match.group(3) or f"Test {match.group(2)} failed"
+            test_name = match.group(2)
+            message = match.group(3) or f"Test {test_name} failed"
+            if detail_str:
+                message = f"{message} ({detail_str})"
             errors.append({
                 "type": "LOGIC",
                 "file": file_path,
                 "line": 1,
-                "message": message,
+                "message": f"{test_name}: {message}",
                 "source": "pytest",
-                "code": ""
+                "code": "",
             })
 
-    return errors
+    # De-duplicate by (file, line, first 60 chars of message)
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for err in errors:
+        key = (err["file"], err["line"], err["message"][:60])
+        if key not in seen:
+            seen.add(key)
+            unique.append(err)
+
+    return unique

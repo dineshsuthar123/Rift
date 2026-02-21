@@ -109,6 +109,7 @@ def parse_errors_json(errors_json_path: str | Path) -> List[ParsedError]:
         return []
 
     parsed: List[ParsedError] = []
+    seen: set[tuple[str, int, str]] = set()  # dedup key
     for err in raw_errors:
         if not isinstance(err, dict):
             continue
@@ -123,6 +124,12 @@ def parse_errors_json(errors_json_path: str | Path) -> List[ParsedError]:
         if not file_path or not message:
             continue
 
+        # Deduplicate: skip identical (file, line, first 60 chars)
+        dedup_key = (file_path, int(line_number), message[:60])
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
         bug_type = classify_bug_type(err)
 
         parsed.append(ParsedError(
@@ -132,6 +139,13 @@ def parse_errors_json(errors_json_path: str | Path) -> List[ParsedError]:
             raw_message=message,
             rule_code=err.get("code") or err.get("rule_code"),
         ))
+
+    # Sort by severity: test failures (LOGIC) first, then SYNTAX, then rest
+    _severity = {
+        "LOGIC": 0, "TYPE_ERROR": 1, "SYNTAX": 2,
+        "IMPORT": 3, "INDENTATION": 4, "LINTING": 5,
+    }
+    parsed.sort(key=lambda e: (_severity.get(e["bug_type"], 9), e["file_path"], e["line_number"]))
 
     return parsed
 

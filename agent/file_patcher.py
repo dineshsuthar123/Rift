@@ -18,6 +18,11 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
         print(f"[PATCHER] Already applied by ruff: {fix.get('file_path', '')} line {fix.get('line_number', 0)}", file=sys.stderr)
         return True
 
+    # Handle blank-line insertion (E302/E303)
+    blank_lines = fix.get("_blank_lines_to_add", 0)
+    if blank_lines > 0:
+        return _insert_blank_lines(repo_path, fix, blank_lines)
+
     # Strip /workspace/ prefix that the Docker sandbox adds to file paths
     raw_path = fix["file_path"]
     cleaned = re.sub(r'^/?workspace/', '', raw_path)
@@ -179,6 +184,34 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
 
     except Exception as e:
         print(f"[PATCHER] Error applying fix to {file_path}: {e}", file=sys.stderr)
+        return False
+
+
+def _insert_blank_lines(repo_path: str, fix: Dict[str, Any], count: int) -> bool:
+    """Insert *count* blank lines before the target line (for E302/E303)."""
+    raw_path = fix["file_path"]
+    cleaned = re.sub(r'^/?workspace/', '', raw_path)
+    fpath = os.path.join(repo_path, cleaned)
+    if not os.path.exists(fpath):
+        return False
+    try:
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+        idx = fix.get("line_number", 1) - 1
+        idx = max(0, min(idx, len(lines)))
+        # Remove existing blank lines immediately before the target
+        while idx > 0 and lines[idx - 1].strip() == "":
+            lines.pop(idx - 1)
+            idx -= 1
+        # Insert the required number of blank lines
+        for _ in range(count):
+            lines.insert(idx, "\n")
+        with open(fpath, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        print(f"[PATCHER] Inserted {count} blank line(s) before line {fix.get('line_number')} in {fix['file_path']}", file=sys.stderr)
+        return True
+    except Exception as exc:
+        print(f"[PATCHER] Blank-line insert failed: {exc}", file=sys.stderr)
         return False
 
 

@@ -29,7 +29,7 @@ from langgraph.graph import StateGraph, END
 # Local imports
 from config import MAX_ITERATIONS, build_branch_name, calculate_score
 from error_parser import parse_errors_json, ParsedError, format_errors_summary
-from fix_generator import generate_fixes, format_fix_for_results
+from fix_generator import generate_fixes, format_fix_for_results, post_fix_ruff_cleanup
 from file_patcher import apply_all_fixes
 from sandbox_runner import run_sandbox
 
@@ -167,7 +167,21 @@ def generate_fix(state: AgentState) -> dict:
         "message": f"Requesting LLM fixes for {len(errors)} error(s)...",
     })
 
-    fixes = generate_fixes(errors, repo_path)
+    # Build iteration context so LLM knows what was already tried
+    iteration_context = {
+        "current_iteration": state["current_iteration"],
+        "previous_fixes": [
+            f"{r.get('file_path', '')}:{r.get('line_number', 0)} - {r.get('fix_description', '')}"
+            for r in state.get("fix_results", []) if r.get("status") == "fixed"
+        ],
+        "failed_fixes": [
+            f"{r.get('file_path', '')}:{r.get('line_number', 0)} - {r.get('fix_description', '')}"
+            for r in state.get("fix_results", []) if r.get("status") == "failed"
+        ],
+        "error_count_history": state.get("error_count_history", []),
+    }
+
+    fixes = generate_fixes(errors, repo_path, iteration_context)
 
     print(f"[GENERATE] LLM returned {len(fixes)} fix(es)", file=sys.stderr)
     for fix in fixes:
@@ -243,6 +257,9 @@ def apply_fix(state: AgentState) -> dict:
         "phase": "applied",
         "message": f"Applied {sum(1 for _, s in results if s)}/{len(new_fixes)} fix(es) successfully",
     })
+
+    # Post-fix cleanup: run ruff --fix to clean up residual issues
+    post_fix_ruff_cleanup(repo_path)
 
     return {"fix_results": existing_results + new_results}
 

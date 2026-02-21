@@ -61,9 +61,11 @@ class TestErrorParser:
 
         parsed = parse_errors_json(str(errors_file))
         assert len(parsed) == 2
-        assert parsed[0]["bug_type"] == "IMPORT"
-        assert parsed[0]["file_path"] == "src/utils.py"
-        assert parsed[1]["bug_type"] == "LOGIC"
+        # Sorted by severity: LOGIC first, then IMPORT
+        assert parsed[0]["bug_type"] == "LOGIC"
+        assert parsed[0]["file_path"] == "src/main.py"
+        assert parsed[1]["bug_type"] == "IMPORT"
+        assert parsed[1]["file_path"] == "src/utils.py"
 
     def test_parse_errors_json_missing_file(self, tmp_path):
         result = parse_errors_json(str(tmp_path / "nonexistent.json"))
