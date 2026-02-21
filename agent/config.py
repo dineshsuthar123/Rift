@@ -18,14 +18,19 @@ GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash").strip()
 
 # ─── Agent Configuration ─────────────────────────────────────────────
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "5"))
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", "/workspace"))
+# v2 compat: TARGET_REPO_PATH overrides WORKSPACE_DIR in GitHub Actions
+WORKSPACE_DIR = Path(
+    os.getenv("TARGET_REPO_PATH")
+    or os.getenv("WORKSPACE_DIR")
+    or "/workspace"
+)
 ERRORS_JSON_PATH = WORKSPACE_DIR / "errors.json"
 RESULTS_JSON_PATH = WORKSPACE_DIR / "results.json"
 
 # ─── Valid Bug Types ──────────────────────────────────────────────────
 VALID_BUG_TYPES = {"LINTING", "SYNTAX", "LOGIC", "TYPE_ERROR", "IMPORT", "INDENTATION"}
 
-# ─── Docker Configuration ────────────────────────────────────────────
+# ─── Docker Configuration (not used in v2 / GitHub Actions) ──────────
 DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "rift-sandbox:latest")
 DOCKER_TIMEOUT = int(os.getenv("DOCKER_TIMEOUT", "120"))  # seconds
 

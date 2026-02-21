@@ -163,6 +163,8 @@ jobs:
           # LLM provider credentials
           ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
           GROQ_API_KEY:          ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY:        ${{ secrets.GOOGLE_API_KEY }}
           LLM_PROVIDER:          ${{ secrets.LLM_PROVIDER }}
           # Workflow context propagated to the Python script
           CORRELATION_ID:        ${{ github.event.inputs.correlation_id }}
@@ -173,8 +175,11 @@ jobs:
           DAILY_CAP_USD:         ${{ github.event.inputs.daily_cap_usd }}
           GH_TOKEN:              ${{ secrets.GH_TOKEN }}
           TARGET_REPO_PATH:      ${{ github.workspace }}/target-repo
+          WORKSPACE_DIR:         ${{ github.workspace }}/target-repo
           WORKFLOW_RUN_ID:       ${{ github.run_id }}
           MAX_ALLOWED_PER_MIN:   '5'
+          # PYTHONPATH: v1 agent modules (error_parser, fix_generator, etc.)
+          PYTHONPATH:            ${{ github.workspace }}/rift-agent/agent
 
       # ── Update check run to completed ─────────────────────────────────────
       - name: Update check run — success
@@ -223,5 +228,6 @@ jobs:
           name: rift-run-${{ github.event.inputs.correlation_id }}
           path: |
             rift-agent/agent/rift_run_*.json
+            target-repo/errors.json
             /tmp/rift_*.log
           retention-days: 7
