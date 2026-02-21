@@ -7,9 +7,7 @@ Run: pytest tests/test_parse_logs.py -v
 """
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest

@@ -53,7 +53,7 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
             cur_indent = len(lines[i]) - len(lines[i].lstrip())
             indent = lines[i][:cur_indent]
             new_lines = code.strip().split("\n")
-            lines[i] = "\n".join(indent + l for l in new_lines) + "\n"
+            lines[i] = "\n".join(indent + line for line in new_lines) + "\n"
 
     def _fuzzy_match(haystack, needle):
         """Check if needle is in haystack, with fallback to quote-stripped match."""
@@ -104,7 +104,7 @@ def apply_fix_to_file(repo_path: str, fix: Dict[str, Any]) -> bool:
             cs += 1
         if cp > 0 or cs > 0:
             old_mid = ao[cp:len(ao)-cs] if cs else ao[cp:]
-            new_mid = af[cp:len(af)-cs] if cs else af[cp:]
+            af[cp:len(af)-cs] if cs else af[cp:]
             # Try to apply this middle replacement to actual line (quote-aware)
             al_nq = al.replace('"', '').replace("'", '')
             if old_mid and old_mid in al_nq:

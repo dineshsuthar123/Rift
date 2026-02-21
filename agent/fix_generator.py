@@ -8,7 +8,7 @@ import re
 import os
 from typing import List, Dict, Any, Optional
 
-from error_parser import ParsedError, format_error_for_llm
+from error_parser import ParsedError
 from config import (
     LLM_PROVIDER, OPENAI_API_KEY, OPENAI_MODEL,
     ANTHROPIC_API_KEY, ANTHROPIC_MODEL, VALID_BUG_TYPES, COMMIT_PREFIX,
@@ -50,7 +50,6 @@ STRICT CONSTRAINTS:
 
 def _read_file_context(repo_path: str, file_path: str, line_number: int, context_lines: int = 10) -> str:
     """Read surrounding lines from a file for better LLM context."""
-    import os
     full_path = os.path.join(repo_path, file_path)
     if not os.path.exists(full_path):
         return f"[File not found: {file_path}]"

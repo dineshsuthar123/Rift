@@ -24,7 +24,6 @@ RIFT 2026 OUTPUT FORMAT (for reference — the Orchestrator generates this):
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -120,7 +119,7 @@ def parse_ruff(ruff_path: str) -> list[dict[str, Any]]:
         return errors
 
     if not isinstance(data, list):
-        print(f"[parse_logs] Warning: Ruff output is not an array", file=sys.stderr)
+        print("[parse_logs] Warning: Ruff output is not an array", file=sys.stderr)
         return errors
 
     for item in data:
