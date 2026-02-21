@@ -4,7 +4,6 @@ Reads and normalizes error logs from the Docker sandbox (errors.json)
 into a structured format the LangGraph agent can process.
 """
 import json
-import re
 from pathlib import Path
 from typing import List, TypedDict, Optional
 

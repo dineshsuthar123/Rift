@@ -5,16 +5,14 @@ Run: python -m pytest tests/ -v
 import json
 import os
 import sys
-import tempfile
-import pytest
 
 # Add agent dir to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from error_parser import parse_errors_json, classify_bug_type, ParsedError
+from error_parser import parse_errors_json, classify_bug_type
 from fix_generator import (
     parse_llm_response, validate_fix, normalize_fix,
-    format_fix_for_results, SYSTEM_PROMPT
+    format_fix_for_results
 )
 from file_patcher import apply_fix_to_file
 from config import build_branch_name as _build_branch_name, calculate_score as _calculate_score

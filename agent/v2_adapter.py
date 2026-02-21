@@ -22,9 +22,7 @@ The caller (call_llm.py) handles:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -168,7 +166,7 @@ def run_agent_v2(
         sys.path.insert(0, str(agent_dir))
 
     # lazy imports — avoid failing at module level if deps are missing
-    from error_parser import parse_errors_json, ParsedError, format_errors_summary   # noqa: E402
+    from error_parser import parse_errors_json, ParsedError   # noqa: E402
     from fix_generator import generate_fixes                                          # noqa: E402
     from file_patcher import apply_all_fixes                                          # noqa: E402
     from sandbox_runner import run_local_analysis                                     # noqa: E402

@@ -73,7 +73,18 @@ async function commitFixes(git, files, message) {
   await git.addConfig("user.email", "ai-agent@rift2026.dev");
   await git.addConfig("user.name", "RIFT AI Agent");
 
-  await git.add(files);
+  // Suppress warnings about ignored files (harmless but breaks simple-git)
+  await git.addConfig("advice.addIgnoredFile", "false");
+
+  // Stage files one-by-one so a single ignored file doesn't abort everything
+  for (const f of files) {
+    try {
+      await git.add(f);
+    } catch (err) {
+      logger.warn({ file: f, err: err.message }, "Skipping file (add failed)");
+    }
+  }
+
   const result = await git.commit(fullMessage);
 
   return {
@@ -168,18 +179,37 @@ async function pushBranch(git, branchName, repoUrl) {
 }
 
 /**
- * Get list of modified/untracked files in the working tree.
+ * Patterns to exclude from staging (generated artefacts / caches).
+ * These are either gitignored or agent‑internal temp files that should
+ * never be committed.
+ */
+const EXCLUDE_PATTERNS = [
+  /__pycache__/,
+  /\.pyc$/,
+  /errors\.json$/,
+  /results\.json$/,
+  /agent_config\.json$/,
+  /\.mypy_cache/,
+  /\.ruff_cache/,
+  /\.pytest_cache/,
+  /node_modules/,
+];
+
+/**
+ * Get list of modified/untracked files in the working tree,
+ * filtering out gitignored and agent-internal artefacts.
  *
  * @param {import("simple-git").SimpleGit} git
  * @returns {string[]}
  */
 async function getModifiedFiles(git) {
   const status = await git.status();
-  return [
+  const all = [
     ...status.modified,
     ...status.not_added,
     ...status.created,
   ];
+  return all.filter((f) => !EXCLUDE_PATTERNS.some((re) => re.test(f)));
 }
 
 module.exports = {

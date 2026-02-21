@@ -8,10 +8,8 @@ import subprocess
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Optional
 
-from config import DOCKER_IMAGE, DOCKER_TIMEOUT, WORKSPACE_DIR, ERRORS_JSON_PATH
+from config import DOCKER_IMAGE, DOCKER_TIMEOUT
 
 
 def run_sandbox(repo_path: str, timeout: int = DOCKER_TIMEOUT) -> str:
@@ -144,7 +142,7 @@ def _parse_pytest_output(output: str, repo_path: str) -> list:
     )
 
     # Match ERROR lines
-    error_pattern = re.compile(
+    re.compile(
         r'ERROR\s+([\w/\\.]+)(?:::(\w+))?\s*-\s*(.+)'
     )
 

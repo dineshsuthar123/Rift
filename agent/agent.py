@@ -21,19 +21,17 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from typing import TypedDict, List, Dict, Any, Optional, Annotated
-from pathlib import Path
+from typing import TypedDict, List, Dict, Any
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
 
 # Local imports
-from config import MAX_ITERATIONS, COMMIT_PREFIX, VALID_BUG_TYPES, build_branch_name, calculate_score
+from config import MAX_ITERATIONS, build_branch_name, calculate_score
 from error_parser import parse_errors_json, ParsedError, format_errors_summary
 from fix_generator import generate_fixes, format_fix_for_results
 from file_patcher import apply_all_fixes
-from sandbox_runner import run_sandbox, run_local_analysis
+from sandbox_runner import run_sandbox
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -372,9 +370,9 @@ def should_continue(state: AgentState) -> str:
         print(f"[AGENT] Max iterations ({state['max_iterations']}) reached. Saving results.", file=sys.stderr)
         return "save_results"
 
-    # Convergence detection: stop if errors haven't decreased for 3+ iterations
+    # Convergence detection: stop if errors haven't decreased for 2+ iterations
     stagnant = state.get("stagnant_count", 0)
-    if stagnant >= 3:
+    if stagnant >= 2:
         print(f"[AGENT] Convergence detected: errors unchanged for {stagnant} iterations. Stopping early.", file=sys.stderr)
         emit_progress("progress", {
             "phase": "converged",
@@ -475,7 +473,7 @@ def run_agent(
     Returns the results dict (also saved to results.json).
     """
     print(f"\n{'#'*60}", file=sys.stderr)
-    print(f"# CI/CD HEALING AGENT — RIFT 2026", file=sys.stderr)
+    print("# CI/CD HEALING AGENT — RIFT 2026", file=sys.stderr)
     print(f"# Repo: {repo_path}", file=sys.stderr)
     print(f"# Team: {team_name}", file=sys.stderr)
     print(f"# Leader: {leader_name}", file=sys.stderr)
@@ -511,7 +509,7 @@ def run_agent(
     }
 
     # Execute the graph
-    final_state = app.invoke(initial_state)
+    app.invoke(initial_state)
 
     # Read and return results.json
     results_path = os.path.join(os.path.abspath(repo_path), "results.json")
